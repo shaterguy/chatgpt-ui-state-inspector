@@ -5,6 +5,8 @@
   "description": "Record chronological ChatGPT UI clicks and structural state changes for application development.",
   "minimum_chrome_version": "114",
   "permissions": [
+    "activeTab",
+    "scripting",
     "storage",
     "unlimitedStorage",
     "sidePanel"
