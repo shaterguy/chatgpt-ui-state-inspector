@@ -4,6 +4,8 @@ import path from "node:path";
 import test from "node:test";
 
 const manifest = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json", import.meta.url), "utf8"));
+const sidepanelSource = fs.readFileSync(new URL("../extension/sidepanel.js", import.meta.url), "utf8");
+const contentSource = fs.readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
 
 test("uses Manifest V3 and a single host boundary", () => {
   assert.equal(manifest.manifest_version, 3);
@@ -11,11 +13,18 @@ test("uses Manifest V3 and a single host boundary", () => {
   assert.equal(manifest.host_permissions, undefined);
 });
 
-test("requests only storage and side-panel permissions", () => {
+test("requests only active-tab injection, storage, and side-panel permissions", () => {
   assert.deepEqual(
     [...manifest.permissions].sort(),
-    ["sidePanel", "storage", "unlimitedStorage"].sort()
+    ["activeTab", "scripting", "sidePanel", "storage", "unlimitedStorage"].sort()
   );
+});
+
+test("does not rely on a privileged tab URL and safely supports fallback injection", () => {
+  assert.doesNotMatch(sidepanelSource, /tab\.url/);
+  assert.match(sidepanelSource, /chrome\.scripting\.executeScript/);
+  assert.match(sidepanelSource, /origin !== CHATGPT_ORIGIN/);
+  assert.match(contentSource, /__CHATGPT_UI_STATE_INSPECTOR_CONTENT_LOADED__/);
 });
 
 test("all manifest files exist", () => {
