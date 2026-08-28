@@ -78,8 +78,13 @@
 
   function attributeSnapshot(element) {
     const attrs = {};
+    const sensitive = isSensitiveSurface(element);
+    const sensitiveAttributes = new Set([
+      "name", "title", "aria-label", "aria-labelledby", "aria-describedby", "data-value"
+    ]);
     for (const name of SAFE_ATTRS) {
       if (!element.hasAttribute?.(name)) continue;
+      if (sensitive && sensitiveAttributes.has(name)) continue;
       const raw = element.getAttribute(name);
       if (name === "title" || name === "aria-label") {
         attrs[name] = sanitizeText(raw, 100);
@@ -115,7 +120,9 @@
     if (rawId && attrs.id !== "[dynamic-id]") push("id", `#${cssEscape(rawId)}`, 0.98);
     const testId = element.getAttribute("data-testid");
     if (testId) push("data-testid", `[data-testid="${cssEscape(testId)}"]`, 0.96);
-    const ariaLabel = sanitizeText(element.getAttribute("aria-label"), 100);
+    const ariaLabel = isSensitiveSurface(element)
+      ? null
+      : sanitizeText(element.getAttribute("aria-label"), 100);
     if (ariaLabel && ariaLabel !== REDACTED) {
       push("aria-label", `${tag}[aria-label="${cssEscape(ariaLabel)}"]`, 0.9);
     }
