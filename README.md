@@ -24,7 +24,7 @@ ChatGPT UI State Inspector는 데스크톱 Chrome의 ChatGPT UI에서 사용자�
 2. Chrome에서 `chrome://extensions`를 엽니다.
 3. **개발자 모드**를 켭니다.
 4. **압축해제된 확장 프로그램을 로드합니다**를 누르고, `manifest.json`이 있는 폴더를 선택합니다.
-5. `https://chatgpt.com` 탭을 열고 확장프로그램 아이콘을 누릅니다.
+5. `https://chatgpt.com` 탭을 열고 확장프로그램 아이콘을 누릅니다. 이미 열려 있던 탭에도 기록기가 자동 연결됩니다.
 
 ## 사용
 
@@ -42,6 +42,8 @@ AI 분석이나 자동화 코드 작성에는 전체 구조를 보존하는 JSON
 | --- | --- |
 | `https://chatgpt.com/*` content script | ChatGPT 탭의 클릭과 구조적 DOM 상태 관찰 |
 | `sidePanel` | 검사 화면과 분리된 기록 제어 UI |
+| `activeTab` | 사용자가 확장프로그램을 연 현재 탭에만 임시 접근 |
+| `scripting` | 확장 설치 전에 열려 있던 ChatGPT 탭에 기록기를 연결 |
 | `storage` | 세션·이벤트를 로컬에 보존 |
 | `unlimitedStorage` | 반복 조작이 많은 긴 세션의 저장 공간 확보 |
 
