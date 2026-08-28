@@ -9,19 +9,55 @@ const sessionsNode = document.querySelector("#sessions");
 const refreshButton = document.querySelector("#refresh");
 const template = document.querySelector("#session-template");
 let currentTabId = null;
+const CHATGPT_ORIGIN = "https://chatgpt.com";
+const CHATGPT_TAB_ERROR = "활성 탭이 https://chatgpt.com인지 확인해 주세요.";
 
 async function activeChatGptTab() {
-  const tabs = await chrome.tabs.query({active: true, currentWindow: true});
-  const tab = tabs[0];
-  if (!tab?.id || !tab.url?.startsWith("https://chatgpt.com/")) {
-    throw new Error("먼저 데스크톱 Chrome에서 chatgpt.com 탭을 활성화해 주세요.");
-  }
+  const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+  if (!Number.isInteger(tab?.id)) throw new Error(CHATGPT_TAB_ERROR);
   currentTabId = tab.id;
   return tab;
 }
 
+async function probeRecorder(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {type: "GET_RECORDING_STATUS"});
+    return response?.ok ? response : null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureContentScript(tabId) {
+  const existing = await probeRecorder(tabId);
+  if (existing) return existing;
+
+  let origin = null;
+  try {
+    const result = await chrome.scripting.executeScript({
+      target: {tabId},
+      func: () => location.origin
+    });
+    origin = result?.[0]?.result || null;
+  } catch {
+    throw new Error(CHATGPT_TAB_ERROR);
+  }
+  if (origin !== CHATGPT_ORIGIN) throw new Error(CHATGPT_TAB_ERROR);
+
+  await chrome.scripting.executeScript({
+    target: {tabId},
+    files: ["lib/core.js", "content.js"]
+  });
+  const injected = await probeRecorder(tabId);
+  if (!injected) {
+    throw new Error("ChatGPT 탭에 기록기를 연결하지 못했습니다. 탭을 새로고침한 뒤 다시 시도해 주세요.");
+  }
+  return injected;
+}
+
 async function sendToActiveTab(message) {
   const tab = await activeChatGptTab();
+  await ensureContentScript(tab.id);
   return chrome.tabs.sendMessage(tab.id, message);
 }
 
@@ -180,7 +216,7 @@ function showError(error) {
 async function refreshLive() {
   try {
     const tab = await activeChatGptTab();
-    const response = await chrome.tabs.sendMessage(tab.id, {type: "GET_RECORDING_STATUS"});
+    const response = await ensureContentScript(tab.id);
     if (!response?.ok) throw new Error(response?.error || "상태를 읽지 못했습니다.");
     const state = response.result;
     startButton.disabled = state.active;
@@ -195,11 +231,11 @@ async function refreshLive() {
       li.textContent = `#${item.seq} ${item.type}`;
       recentNode.append(li);
     }
-  } catch {
+  } catch (error) {
     startButton.disabled = false;
     stopButton.disabled = true;
     titleInput.disabled = false;
-    setStatus("ChatGPT 탭을 활성화하면 기록할 수 있습니다.");
+    setStatus(error.message || CHATGPT_TAB_ERROR, "error");
     recentNode.replaceChildren();
   }
 }
@@ -211,6 +247,7 @@ startButton.addEventListener("click", async () => {
     const title = titleInput.value.replace(/\s+/g, " ").trim();
     if (!title) throw new Error("기록 제목을 입력해 주세요.");
     const tab = await activeChatGptTab();
+    await ensureContentScript(tab.id);
     const created = await chrome.runtime.sendMessage({type: "CREATE_SESSION", title, tabId: tab.id});
     if (!created?.ok) throw new Error(created?.error || "세션을 만들지 못했습니다.");
     session = created.result;
