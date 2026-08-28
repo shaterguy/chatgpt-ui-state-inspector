@@ -14,6 +14,7 @@
   let seq = 0;
   let buffer = [];
   let flushTimer = null;
+  let flushPromise = Promise.resolve();
   let observer = null;
   let urlTimer = null;
   let lastUrl = location.href;
@@ -57,22 +58,27 @@
     return event;
   }
 
-  async function flush() {
+  function flush() {
     if (flushTimer) {
       clearTimeout(flushTimer);
       flushTimer = null;
     }
-    if (!buffer.length || !sessionId) return;
-    const events = buffer;
-    buffer = [];
-    try {
-      const response = await chrome.runtime.sendMessage({type: "APPEND_EVENTS", sessionId, events});
-      if (!response?.ok) throw new Error(response?.error || "Could not save events.");
-    } catch (error) {
-      buffer.unshift(...events);
-      console.warn("[ChatGPT UI State Inspector] save retry scheduled", error);
-      if (!flushTimer) flushTimer = setTimeout(() => void flush(), 1000);
-    }
+    const persistNextBatch = async () => {
+      if (!buffer.length || !sessionId) return;
+      const events = buffer;
+      buffer = [];
+      try {
+        const response = await chrome.runtime.sendMessage({type: "APPEND_EVENTS", sessionId, events});
+        if (!response?.ok) throw new Error(response?.error || "Could not save events.");
+      } catch (error) {
+        buffer.unshift(...events);
+        console.warn("[ChatGPT UI State Inspector] save retry scheduled", error);
+        if (!flushTimer) flushTimer = setTimeout(() => void flush(), 1000);
+        throw error;
+      }
+    };
+    flushPromise = flushPromise.then(persistNextBatch, persistNextBatch);
+    return flushPromise;
   }
 
   function isVisible(element) {

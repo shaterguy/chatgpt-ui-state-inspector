@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-const root = new URL("../", import.meta.url);
 const manifest = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json", import.meta.url), "utf8"));
 
 test("uses Manifest V3 and a single host boundary", () => {
@@ -26,6 +25,6 @@ test("all manifest files exist", () => {
     ...manifest.content_scripts.flatMap((script) => script.js)
   ];
   for (const file of files) {
-    assert.equal(fs.existsSync(path.join(new URL("../extension/", root).pathname, file)), true, file);
+    assert.equal(fs.existsSync(path.join(new URL("../extension/", import.meta.url).pathname, file)), true, file);
   }
 });
