@@ -1,6 +1,9 @@
 (() => {
   "use strict";
 
+  if (globalThis.__CHATGPT_UI_STATE_INSPECTOR_CONTENT_LOADED__) return;
+  globalThis.__CHATGPT_UI_STATE_INSPECTOR_CONTENT_LOADED__ = true;
+
   const Core = globalThis.UiStateInspectorCore;
   const INTERACTIVE_SELECTOR = [
     "button", "select", "option", "a[href]", "input",
