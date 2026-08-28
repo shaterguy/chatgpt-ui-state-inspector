@@ -33,3 +33,23 @@ test("filters unstable class tokens", () => {
     ["flex", "stable", "rounded"]
   );
 });
+
+test("omits descriptive and value-like attributes on sensitive surfaces", () => {
+  const values = {
+    "aria-label": "private prompt",
+    "data-value": "private input",
+    "data-testid": "composer-input",
+    "class": "stable"
+  };
+  const element = {
+    matches: () => true,
+    closest: () => null,
+    hasAttribute: (name) => Object.hasOwn(values, name),
+    getAttribute: (name) => values[name] ?? null
+  };
+  const attrs = Core.attributeSnapshot(element);
+  assert.equal(attrs["aria-label"], undefined);
+  assert.equal(attrs["data-value"], undefined);
+  assert.equal(attrs["data-testid"], "composer-input");
+  assert.deepEqual(Array.from(attrs.classTokens), ["stable"]);
+});
