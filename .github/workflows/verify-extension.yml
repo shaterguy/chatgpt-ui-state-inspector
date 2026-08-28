@@ -1,0 +1,52 @@
+name: verify-extension
+
+on:
+  push:
+    branches:
+      - v0.1.0-dev1
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b163ceea73d27597364c9af683
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          find extension scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 |
+            xargs -0 -n1 node --check
+
+      - name: Run unit and manifest tests
+        run: node --test
+
+      - name: Validate security and package boundary
+        run: node scripts/validate-package.mjs
+
+      - name: Verify loadable archive structure
+        shell: bash
+        run: |
+          mkdir -p dist
+          (
+            cd extension
+            zip -q -r ../dist/chatgpt-ui-state-inspector-v0.1.0-dev1.zip .
+          )
+          unzip -Z1 dist/chatgpt-ui-state-inspector-v0.1.0-dev1.zip | grep -Fx manifest.json
+          unzip -t dist/chatgpt-ui-state-inspector-v0.1.0-dev1.zip
+
+      - name: Upload unpacked extension artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: chatgpt-ui-state-inspector-v0.1.0-dev1-attempt-${{ github.run_attempt }}
+          path: extension/
+          if-no-files-found: error
+          retention-days: 14

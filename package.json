@@ -1,0 +1,14 @@
+{
+  "name": "chatgpt-ui-state-inspector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chronological ChatGPT UI state recorder Chrome extension",
+  "scripts": {
+    "test": "node --test",
+    "validate": "node scripts/validate-package.mjs"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}

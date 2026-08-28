@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT UI State Inspector",
+  "version": "0.1.0",
+  "description": "Record chronological ChatGPT UI clicks and structural state changes for application development.",
+  "minimum_chrome_version": "114",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "sidePanel"
+  ],
+  "action": {
+    "default_title": "Open ChatGPT UI State Inspector"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "lib/core.js",
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}
