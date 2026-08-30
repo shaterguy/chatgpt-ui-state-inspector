@@ -8,6 +8,7 @@ const sidepanelHtml = fs.readFileSync(new URL("../extension/sidepanel.html", imp
 const sidepanelSource = fs.readFileSync(new URL("../extension/sidepanel.js", import.meta.url), "utf8");
 const handshakeSource = fs.readFileSync(new URL("../extension/handshake.js", import.meta.url), "utf8");
 const carrierSource = fs.readFileSync(new URL("../extension/lib/protocol-structure-carrier.js", import.meta.url), "utf8");
+const nativeSource = fs.readFileSync(new URL("../extension/lib/work-native-state.js", import.meta.url), "utf8");
 const contentSource = fs.readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
 const pageProbeSource = fs.readFileSync(new URL("../extension/page-probe.js", import.meta.url), "utf8");
 
@@ -30,10 +31,11 @@ test("requests only active-tab injection, storage, and side-panel permissions", 
   );
 });
 
-test("loads the structure carrier and isolated handshake around the existing recorder", () => {
+test("loads the Work protocol classifier before the existing page probe", () => {
   assert.deepEqual(manifest.content_scripts[0].js, [
     "lib/protocol.js",
     "lib/protocol-structure-carrier.js",
+    "lib/work-native-state.js",
     "page-probe.js"
   ]);
   assert.deepEqual(manifest.content_scripts[1].js, [
@@ -48,9 +50,11 @@ test("loads the structure carrier and isolated handshake around the existing rec
   assert.match(handshakeSource, /data-ui-state-inspector-carrier/);
   assert.match(handshakeSource, /data-ui-state-inspector-decoder/);
   assert.match(carrierSource, /DECODER_BUILD = "0\.1\.7-dev11"/);
-  assert.match(carrierSource, /encoded_item/);
   assert.match(carrierSource, /ei:codec:sse/);
   assert.match(carrierSource, /esig:FIRST_VISIBLE_TOKEN/);
+  assert.match(nativeSource, /BUILD_ID = "0\.1\.8-dev12"/);
+  assert.match(nativeSource, /final_channel_token/);
+  assert.match(nativeSource, /VISIBLE_ANSWER/);
 });
 
 test("loads the sidepanel UI immediately and verifies readiness by extension messaging", () => {
