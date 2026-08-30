@@ -47,8 +47,10 @@ test("loads the structure carrier and isolated handshake around the existing rec
   assert.match(handshakeSource, /GET_INSPECTOR_HANDSHAKE/);
   assert.match(handshakeSource, /data-ui-state-inspector-carrier/);
   assert.match(handshakeSource, /data-ui-state-inspector-decoder/);
-  assert.match(carrierSource, /DECODER_BUILD = "0\.1\.6-dev10"/);
+  assert.match(carrierSource, /DECODER_BUILD = "0\.1\.7-dev11"/);
   assert.match(carrierSource, /encoded_item/);
+  assert.match(carrierSource, /ei:codec:sse/);
+  assert.match(carrierSource, /esig:FIRST_VISIBLE_TOKEN/);
 });
 
 test("loads the sidepanel UI immediately and verifies readiness by extension messaging", () => {
