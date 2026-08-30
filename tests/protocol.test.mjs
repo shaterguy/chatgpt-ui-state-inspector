@@ -18,7 +18,17 @@ test("detects the first user-visible token marker", () => {
   assert.equal(result.signals[0].code, "FIRST_VISIBLE_TOKEN");
 });
 
-test("detects stream completion variants", () => {
+test("detects the first final-channel token marker", () => {
+  const result = Protocol.summarizeSseData(JSON.stringify({
+    type: "message_marker",
+    marker: "final_channel_token",
+    event: "first"
+  }));
+  assert.equal(result.signals[0].code, "FIRST_VISIBLE_TOKEN");
+  assert.equal(result.signals[0].confidence, 1);
+});
+
+test("detects explicit stream completion variants", () => {
   assert.equal(
     Protocol.detectSignals(Protocol.summarizePayload({type: "message_stream_complete"}))[0].code,
     "STREAM_COMPLETE"
@@ -50,7 +60,8 @@ test("does not echo an unparsed frame", () => {
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
-test("treats the SSE done sentinel as completion", () => {
+test("treats SSE DONE as transport metadata, not whole-turn completion", () => {
   const result = Protocol.summarizeSseData("[DONE]");
-  assert.equal(result.signals[0].code, "STREAM_COMPLETE");
+  assert.equal(result.summary.type, "sse_done");
+  assert.deepEqual(Array.from(result.signals), []);
 });
