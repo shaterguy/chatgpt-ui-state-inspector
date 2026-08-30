@@ -50,8 +50,8 @@
     return "other";
   }
 
-  function hasNewAssistantOutput(assistantTurnCount, baselineCount, visible) {
-    return Boolean(visible && Number(assistantTurnCount) > Number(baselineCount));
+  function hasNewAssistantOutput(assistantTurnCount, baselineCount, visible, rootChanged = false) {
+    return Boolean(visible && (Number(assistantTurnCount) > Number(baselineCount) || rootChanged));
   }
 
   function isDomGenerationActive({statusKind, stopButton, streamMarker}) {
