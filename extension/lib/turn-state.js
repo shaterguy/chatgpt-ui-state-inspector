@@ -9,7 +9,7 @@
     ERROR: "ERROR"
   });
   const ACTIVE_PHASES = new Set([PHASES.THINKING, PHASES.ANSWERING]);
-  const TRUSTED_PROMPT_SOURCES = new Set(["dom-click", "dom-submit"]);
+  const TRUSTED_PROMPT_SOURCES = new Set(["dom-click", "dom-submit", "fetch"]);
   const DEFAULT_CONFIDENCE = Object.freeze({
     PROMPT_SUBMITTED: 0.86,
     GENERATION_ACTIVE: 0.82,
@@ -37,6 +37,26 @@
   function timestamp(value) {
     if (typeof value === "string" && !Number.isNaN(Date.parse(value))) return value;
     return new Date().toISOString();
+  }
+
+  function isCanonicalConversationPath(path) {
+    return path === "/backend-api/f/conversation" || path === "/backend-api/f/responses";
+  }
+
+  function classifyLiveStatus(text) {
+    const value = String(text || "");
+    if (/response complete|generation complete|finished|응답 완료|답변 완료|완료됨/i.test(value)) return "complete";
+    if (/\b(thinking|reasoning|working|generating)\b|생각|추론|작업 중|작성 중|응답 중/i.test(value)) return "thinking";
+    return "other";
+  }
+
+  function hasNewAssistantOutput(assistantTurnCount, baselineCount, visible) {
+    return Boolean(visible && Number(assistantTurnCount) > Number(baselineCount));
+  }
+
+  function isDomGenerationActive({statusKind, stopButton, streamMarker}) {
+    if (statusKind === "complete") return false;
+    return Boolean(statusKind === "thinking" || stopButton || streamMarker);
   }
 
   function blankState() {
@@ -159,7 +179,7 @@
 
       function isStrongThinkingFallback() {
         return source === "dom" && signalConfidence >= 0.9 &&
-          /(?:live status reports thinking|thinking|reasoning|생각|추론)/i.test(reason);
+          /(?:live status reports thinking|thinking|reasoning|working|생각|추론|작업 중)/i.test(reason);
       }
 
       if (code === "PROMPT_SUBMITTED") {
@@ -177,9 +197,7 @@
       } else if (code === "FIRST_VISIBLE_TOKEN") {
         if (!ACTIVE_PHASES.has(state.phase)) beginTurn();
         state.generationActive = true;
-        state.sawVisibleAnswer = true;
         if (!state.firstVisibleTokenAt) state.firstVisibleTokenAt = at;
-        changePhase(PHASES.ANSWERING);
       } else if (code === "VISIBLE_ANSWER") {
         if (ACTIVE_PHASES.has(state.phase)) {
           state.generationActive = true;
@@ -216,7 +234,14 @@
     return Object.freeze({ingest, snapshot, hydrate, reset});
   }
 
-  const api = Object.freeze({PHASES, createTracker});
+  const api = Object.freeze({
+    PHASES,
+    createTracker,
+    isCanonicalConversationPath,
+    classifyLiveStatus,
+    hasNewAssistantOutput,
+    isDomGenerationActive
+  });
   globalThis.UiStateInspectorTurnState = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();
