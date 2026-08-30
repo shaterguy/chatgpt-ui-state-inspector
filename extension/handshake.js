@@ -3,13 +3,17 @@
 (() => {
   const CARRIER_ATTR = "data-ui-state-inspector-carrier";
   const PARSER_ATTR = "data-ui-state-inspector-parser";
+  const DECODER_ATTR = "data-ui-state-inspector-decoder";
+  const EXPECTED_DECODER_BUILD = "0.1.6-dev10";
 
   function snapshot() {
     const root = document.documentElement;
+    const decoderBuild = root?.getAttribute(DECODER_ATTR) || null;
     return {
       origin: location.origin,
-      carrier: root?.getAttribute(CARRIER_ATTR) || null,
+      carrier: decoderBuild === EXPECTED_DECODER_BUILD ? root?.getAttribute(CARRIER_ATTR) || null : null,
       parserBuildId: root?.getAttribute(PARSER_ATTR) || null,
+      decoderBuild,
       readyState: document.readyState
     };
   }
