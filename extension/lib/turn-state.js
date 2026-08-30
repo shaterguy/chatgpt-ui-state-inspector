@@ -9,6 +9,7 @@
     ERROR: "ERROR"
   });
   const ACTIVE_PHASES = new Set([PHASES.THINKING, PHASES.ANSWERING]);
+  const TRUSTED_PROMPT_SOURCES = new Set(["dom-click", "dom-submit"]);
   const DEFAULT_CONFIDENCE = Object.freeze({
     PROMPT_SUBMITTED: 0.86,
     GENERATION_ACTIVE: 0.82,
@@ -40,7 +41,7 @@
 
   function blankState() {
     return {
-      protocolVersion: "1.1.0",
+      protocolVersion: "1.1.1",
       phase: PHASES.IDLE,
       turnSequence: 0,
       turnId: null,
@@ -156,16 +157,36 @@
         changePhase(PHASES.THINKING);
       }
 
-      if (code === "PROMPT_SUBMITTED" || code === "GENERATION_ACTIVE") {
-        beginTurn();
-        state.generationActive = true;
-        if (state.phase !== PHASES.ANSWERING) changePhase(PHASES.THINKING);
-      } else if (code === "FIRST_VISIBLE_TOKEN" || code === "VISIBLE_ANSWER") {
-        beginTurn();
+      function isStrongThinkingFallback() {
+        return source === "dom" && signalConfidence >= 0.9 &&
+          /(?:live status reports thinking|thinking|reasoning|생각|추론)/i.test(reason);
+      }
+
+      if (code === "PROMPT_SUBMITTED") {
+        if (ACTIVE_PHASES.has(state.phase)) {
+          state.generationActive = true;
+        } else if (TRUSTED_PROMPT_SOURCES.has(source)) {
+          beginTurn();
+        }
+      } else if (code === "GENERATION_ACTIVE") {
+        if (ACTIVE_PHASES.has(state.phase)) {
+          state.generationActive = true;
+        } else if (isStrongThinkingFallback()) {
+          beginTurn();
+        }
+      } else if (code === "FIRST_VISIBLE_TOKEN") {
+        if (!ACTIVE_PHASES.has(state.phase)) beginTurn();
         state.generationActive = true;
         state.sawVisibleAnswer = true;
         if (!state.firstVisibleTokenAt) state.firstVisibleTokenAt = at;
         changePhase(PHASES.ANSWERING);
+      } else if (code === "VISIBLE_ANSWER") {
+        if (ACTIVE_PHASES.has(state.phase)) {
+          state.generationActive = true;
+          state.sawVisibleAnswer = true;
+          if (!state.firstVisibleTokenAt) state.firstVisibleTokenAt = at;
+          changePhase(PHASES.ANSWERING);
+        }
       } else if (code === "STREAM_COMPLETE" || code === "DOM_COMPLETE" || code === "GENERATION_INACTIVE") {
         if (ACTIVE_PHASES.has(state.phase)) {
           state.generationActive = false;
