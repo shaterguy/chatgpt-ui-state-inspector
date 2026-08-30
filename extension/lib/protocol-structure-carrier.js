@@ -2,8 +2,38 @@
   "use strict";
 
   const CARRIER_BUILD = "0.1.3-dev7";
+  const CARRIER_ATTR = "data-ui-state-inspector-carrier";
+  const PARSER_ATTR = "data-ui-state-inspector-parser";
   const base = globalThis.UiStateInspectorProtocol;
   if (!base) return;
+
+  let parserBuild = null;
+  try {
+    parserBuild = base.summarizePayload?.({})?.buildId || null;
+  } catch {}
+
+  function publishDomHandshake() {
+    try {
+      const root = document.documentElement;
+      if (!root) return false;
+      root.setAttribute(CARRIER_ATTR, CARRIER_BUILD);
+      if (parserBuild) root.setAttribute(PARSER_ATTR, String(parserBuild).slice(0, 40));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (!publishDomHandshake()) {
+    const publishOnce = () => {
+      if (publishDomHandshake()) observer.disconnect();
+    };
+    const observer = new MutationObserver(publishOnce);
+    try {
+      observer.observe(document, {childList: true, subtree: true});
+    } catch {}
+  }
+
   if (globalThis.__CHATGPT_UI_STATE_INSPECTOR_STRUCTURE_CARRIER__ === CARRIER_BUILD) return;
 
   const SAFE_TOKEN = /^[A-Za-z0-9_.:/-]{1,80}$/;
@@ -110,4 +140,5 @@
 
   globalThis.UiStateInspectorProtocol = api;
   globalThis.__CHATGPT_UI_STATE_INSPECTOR_STRUCTURE_CARRIER__ = CARRIER_BUILD;
+  publishDomHandshake();
 })();
