@@ -14,6 +14,7 @@
 
   function publishDomHandshake() {
     try {
+      if (typeof document === "undefined") return false;
       const root = document.documentElement;
       if (!root) return false;
       root.setAttribute(CARRIER_ATTR, CARRIER_BUILD);
@@ -24,11 +25,10 @@
     }
   }
 
-  if (!publishDomHandshake()) {
-    const publishOnce = () => {
+  if (!publishDomHandshake() && typeof document !== "undefined" && typeof MutationObserver !== "undefined") {
+    const observer = new MutationObserver(() => {
       if (publishDomHandshake()) observer.disconnect();
-    };
-    const observer = new MutationObserver(publishOnce);
+    });
     try {
       observer.observe(document, {childList: true, subtree: true});
     } catch {}
