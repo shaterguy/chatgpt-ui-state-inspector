@@ -5,9 +5,9 @@
 The extension uses two fixed `https://chatgpt.com/*` content-script worlds.
 
 1. `MAIN`: `lib/protocol.js` and `page-probe.js` wrap the page's existing `fetch` and `WebSocket` constructors, delegate every original call, and inspect only cloned or copied response data. The probe cannot call `chrome.*`, persist data, or make a separate network request.
-2. `ISOLATED`: `lib/core.js`, `lib/turn-state.js`, and `content.js` observe DOM state, validate the bridge, maintain the canonical turn-state machine, and send bounded sanitized events to the service worker.
+2. `ISOLATED`: `lib/core.js`, `lib/turn-state.js`, and `content.js` observe DOM state, validate and re-normalize the page bridge, maintain the canonical turn-state machine, and send bounded sanitized events to the service worker.
 
-The bridge uses same-window `postMessage` events with a per-page random token, a fixed channel, origin checks, direction checks, and a maximum serialized message size.
+The bridge uses same-window `postMessage` events with a per-page routing token, a fixed channel, origin checks, and a maximum serialized message size. The routing token is not treated as a security secret: a capture-phase isolated-world guard stops every page-probe message, rebuilds it from a field allowlist, redacts dynamic path segments, replaces free-text reasons with canonical reason codes, and only then re-dispatches it to the recorder. Unknown message types, signal codes, fields, and free text are dropped.
 
 ## Canonical turn state
 
@@ -28,12 +28,13 @@ The MAIN-world probe publishes the current normalized state through `window.__CH
 
 1. The side panel creates one named session.
 2. The isolated content script records a baseline and starts capture-phase click, submit, and MutationObserver listeners.
-3. The MAIN probe reports sanitized transport metadata and candidate state signals.
-4. The isolated tracker correlates protocol and DOM signals, emits `turn_state_signal` and `turn_state_transition`, and publishes the current public state.
-5. Related mutations and delayed UI snapshots reference the originating click ID.
-6. Event batches are sent to the extension service worker.
-7. The service worker appends immutable storage chunks, updates session metadata, and persists the latest canonical turn state.
-8. The side panel reads all chunks, sorts by sequence, and exports the complete session.
+3. The MAIN probe reports candidate transport metadata and state signals.
+4. The isolated bridge guard stops and allowlist-reissues the message.
+5. The isolated tracker correlates sanitized protocol and DOM signals, emits `turn_state_signal` and `turn_state_transition`, and publishes the current public state.
+6. Related mutations and delayed UI snapshots reference the originating click ID.
+7. Event batches are sent to the extension service worker.
+8. The service worker appends immutable storage chunks, updates session metadata, and persists the latest canonical turn state.
+9. The side panel reads all chunks, sorts by sequence, and exports the complete session.
 
 ## Resilience
 
@@ -49,6 +50,7 @@ The MAIN-world probe publishes the current normalized state through `window.__CH
 - No extension-originated network requests or telemetry
 - No request body, response body, message text, headers, cookies, tokens, URL query, or fragment persistence
 - Protocol metadata allowlist: event type, marker, status, role, content type, finish reason, boolean flags, key names, and byte length
-- Sender, tab ID, bridge token, origin, and message-size validation
+- Dynamic identifier-like URL path segments are replaced with `:id`
+- Sender, tab ID, origin, message-size, message-type, signal-code, and field-level validation
 - No input values, `innerHTML`, runtime code generation, remote scripts, or MAIN-world persistent storage
 - Bounded event batches and stream parsers

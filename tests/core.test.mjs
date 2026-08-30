@@ -53,3 +53,42 @@ test("omits descriptive and value-like attributes on sensitive surfaces", () => 
   assert.equal(attrs["data-testid"], "composer-input");
   assert.deepEqual(Array.from(attrs.classTokens), ["stable"]);
 });
+
+test("revalidates forged protocol frames with a field allowlist", () => {
+  const secret = "private answer body 12345";
+  const sanitized = Core.sanitizeProbeMessage("protocol_frame", {
+    transport: "fetch-sse",
+    requestId: "fetch-1",
+    path: "/backend-api/conversation/12345678901234567890",
+    rawBody: secret,
+    summary: {
+      type: secret,
+      marker: "user_visible_token",
+      topLevelKeys: ["type", secret],
+      rawBody: secret,
+      byteLength: 42
+    },
+    signals: [{code: "FIRST_VISIBLE_TOKEN", reason: secret, confidence: 0.99}]
+  });
+  const json = JSON.stringify(sanitized);
+  assert.equal(json.includes(secret), false);
+  assert.equal(sanitized.path, "/backend-api/conversation/:id");
+  assert.equal(sanitized.summary.type, null);
+  assert.deepEqual(Array.from(sanitized.summary.topLevelKeys), ["type"]);
+  assert.equal(sanitized.signals[0].reason, "first user-visible token marker observed");
+});
+
+test("ignores page-supplied free-text reasons and unknown signals", () => {
+  const accepted = Core.sanitizeProbeMessage("state_signal", {
+    code: "STREAM_COMPLETE",
+    reason: "private completion text",
+    source: "protocol",
+    confidence: 0.9
+  });
+  assert.equal(accepted.reason, "stream completion signal observed");
+  assert.equal(Core.sanitizeProbeMessage("state_signal", {code: "PRIVATE_PROMPT"}), null);
+});
+
+test("rejects unknown bridge message types", () => {
+  assert.equal(Core.sanitizeProbeMessage("store_raw_payload", {text: "secret"}), null);
+});

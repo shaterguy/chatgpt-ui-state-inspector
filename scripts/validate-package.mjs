@@ -45,6 +45,7 @@ assert.ok(packagedFiles.length >= required.length);
 const javascriptFiles = packagedFiles.filter((file) => file.endsWith(".js"));
 const pageProbePath = path.join(extensionRoot, "page-probe.js");
 const pageProbe = fs.readFileSync(pageProbePath, "utf8");
+const coreSource = fs.readFileSync(path.join(extensionRoot, "lib/core.js"), "utf8");
 const nonProbeJavascript = javascriptFiles
   .filter((file) => file !== pageProbePath)
   .map((file) => fs.readFileSync(file, "utf8"))
@@ -84,9 +85,12 @@ assert.match(pageProbe, /new NativeWebSocket/);
 assert.match(pageProbe, /response\.clone\(\)/);
 assert.match(pageProbe, /__CHATGPT_UI_STATE_INSPECTOR_STATE__/);
 assert.match(pageProbe, /chatgpt-ui-state-inspector:phasechange/);
+assert.match(coreSource, /sanitizeProbeMessage/);
+assert.match(coreSource, /stopImmediatePropagation\(\)/);
+assert.match(coreSource, /new MessageEvent\("message"/);
 
 const protocolSource = fs.readFileSync(path.join(extensionRoot, "lib/protocol.js"), "utf8");
 assert.doesNotMatch(protocolSource, /parts\s*:\s*parts/);
 assert.doesNotMatch(protocolSource, /raw(?:Data|Payload|Body)\s*:/);
 
-console.log(`Validated ${packagedFiles.length} extension files with passive MAIN-world inspection and fixed chatgpt.com scope.`);
+console.log(`Validated ${packagedFiles.length} extension files with passive MAIN-world inspection, isolated payload allowlisting, and fixed chatgpt.com scope.`);

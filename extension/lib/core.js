@@ -3,6 +3,8 @@
 
   const REDACTED = "[redacted]";
   const SENSITIVE_HREF = /^\/(?:c|g|share)\//i;
+  const BRIDGE_CHANNEL = "chatgpt-ui-state-inspector@1";
+  const BRIDGE_GUARD_MARKER = "__CHATGPT_UI_STATE_INSPECTOR_BRIDGE_GUARD__";
   const CONTROL_ROLES = new Set([
     "button", "menuitem", "menuitemradio", "menuitemcheckbox", "option",
     "radio", "switch", "tab", "checkbox", "combobox", "listbox"
@@ -13,6 +15,22 @@
     "aria-expanded", "aria-current", "aria-haspopup", "aria-controls",
     "data-testid", "data-state", "data-value", "disabled", "checked"
   ];
+  const PROBE_SIGNAL_CODES = new Set([
+    "PROMPT_SUBMITTED", "GENERATION_ACTIVE", "FIRST_VISIBLE_TOKEN", "VISIBLE_ANSWER",
+    "STREAM_COMPLETE", "DOM_COMPLETE", "GENERATION_INACTIVE", "GENERATION_ERROR"
+  ]);
+  const PROBE_TRANSPORTS = new Set(["fetch", "fetch-sse", "websocket"]);
+  const PROBE_SOURCES = new Set(["protocol", "fetch", "websocket"]);
+  const PROBE_REASONS = Object.freeze({
+    PROMPT_SUBMITTED: "conversation request observed",
+    GENERATION_ACTIVE: "generation active signal observed",
+    FIRST_VISIBLE_TOKEN: "first user-visible token marker observed",
+    VISIBLE_ANSWER: "assistant visible output observed",
+    STREAM_COMPLETE: "stream completion signal observed",
+    DOM_COMPLETE: "DOM completion signal observed",
+    GENERATION_INACTIVE: "generation inactive signal observed",
+    GENERATION_ERROR: "generation error signal observed"
+  });
 
   function cleanWhitespace(value) {
     return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -26,6 +44,223 @@
     if (/\b(?:\+?\d[\d .()-]{7,}\d)\b/.test(text)) return REDACTED;
     if (text.length > maxLength) return "[redacted:long-text]";
     return text;
+  }
+
+  function plainObject(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  }
+
+  function safeProbeToken(value, maxLength = 80) {
+    if (typeof value !== "string") return null;
+    const text = value.trim();
+    if (!text || text.length > maxLength) return null;
+    return /^[A-Za-z0-9_.:/-]+$/.test(text) ? text : null;
+  }
+
+  function safeProbePath(value) {
+    if (typeof value !== "string" || !value.startsWith("/")) return null;
+    const segments = value.split("/").slice(0, 20).map((segment) => {
+      if (!segment) return "";
+      if (
+        segment.length > 48 ||
+        /^[0-9]{6,}$/.test(segment) ||
+        /^[a-f0-9]{16,}$/i.test(segment) ||
+        /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment) ||
+        /^[A-Za-z0-9_-]{24,}$/.test(segment)
+      ) return ":id";
+      return /^[A-Za-z0-9._~-]+$/.test(segment) ? segment : ":redacted";
+    });
+    return segments.join("/").slice(0, 240) || "/";
+  }
+
+  function safeProbeInteger(value, maximum = 10000000) {
+    const numeric = Number(value);
+    if (!Number.isInteger(numeric) || numeric < 0) return null;
+    return Math.min(numeric, maximum);
+  }
+
+  function safeProbeConfidence(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0.6;
+    return Math.max(0, Math.min(1, numeric));
+  }
+
+  function safeProbeTimestamp(value) {
+    if (typeof value !== "string" || Number.isNaN(Date.parse(value))) return null;
+    return value.slice(0, 40);
+  }
+
+  function safeProbeTokenArray(value, limit = 20) {
+    if (!Array.isArray(value)) return [];
+    const result = [];
+    for (const item of value) {
+      const token = safeProbeToken(item);
+      if (token && !result.includes(token)) result.push(token);
+      if (result.length >= limit) break;
+    }
+    return result;
+  }
+
+  function sanitizeProtocolSummary(value) {
+    const source = plainObject(value) || {};
+    const nullableBoolean = (candidate) => typeof candidate === "boolean" ? candidate : null;
+    return {
+      type: safeProbeToken(source.type),
+      event: safeProbeToken(source.event),
+      marker: safeProbeToken(source.marker),
+      status: safeProbeToken(source.status),
+      endTurn: nullableBoolean(source.endTurn),
+      role: safeProbeToken(source.role),
+      contentType: safeProbeToken(source.contentType),
+      finishReason: safeProbeToken(source.finishReason),
+      errorCode: safeProbeToken(source.errorCode),
+      error: Boolean(source.error),
+      assistantVisibleText: Boolean(source.assistantVisibleText),
+      topLevelKeys: safeProbeTokenArray(source.topLevelKeys),
+      messageKeys: safeProbeTokenArray(source.messageKeys),
+      metadataKeys: safeProbeTokenArray(source.metadataKeys),
+      byteLength: safeProbeInteger(source.byteLength, 5000000) ?? 0,
+      parseError: Boolean(source.parseError)
+    };
+  }
+
+  function sanitizeProbeSignal(value) {
+    const source = plainObject(value);
+    const code = safeProbeToken(source?.code);
+    if (!code || !PROBE_SIGNAL_CODES.has(code)) return null;
+    return {
+      code,
+      confidence: safeProbeConfidence(source.confidence),
+      reason: PROBE_REASONS[code]
+    };
+  }
+
+  function sanitizeTransport(value) {
+    const token = safeProbeToken(value, 40);
+    return token && PROBE_TRANSPORTS.has(token) ? token : null;
+  }
+
+  function sanitizeSource(value) {
+    const token = safeProbeToken(value, 40);
+    return token && PROBE_SOURCES.has(token) ? token : "protocol";
+  }
+
+  function sanitizeProbeMessage(type, payload) {
+    const messageType = safeProbeToken(type, 40);
+    const source = plainObject(payload);
+    if (!messageType || !source) return null;
+
+    if (messageType === "probe_ready") {
+      const transports = plainObject(source.transports) || {};
+      return {
+        protocolVersion: safeProbeToken(source.protocolVersion, 30),
+        transports: {
+          fetch: Boolean(transports.fetch),
+          websocket: Boolean(transports.websocket)
+        }
+      };
+    }
+    if (messageType === "capture_state") return {enabled: Boolean(source.enabled)};
+    if (messageType === "state_signal") {
+      const signal = sanitizeProbeSignal(source);
+      if (!signal) return null;
+      return {
+        ...signal,
+        source: sanitizeSource(source.source),
+        transport: sanitizeTransport(source.transport),
+        requestId: safeProbeToken(source.requestId, 80),
+        timestamp: safeProbeTimestamp(source.timestamp)
+      };
+    }
+    if (messageType === "protocol_frame") {
+      return {
+        transport: sanitizeTransport(source.transport),
+        requestId: safeProbeToken(source.requestId, 80),
+        path: safeProbePath(source.path),
+        frameIndex: safeProbeInteger(source.frameIndex, 10000) ?? 0,
+        eventName: safeProbeToken(source.eventName, 80),
+        summary: sanitizeProtocolSummary(source.summary),
+        signals: (Array.isArray(source.signals) ? source.signals : [])
+          .slice(0, 8)
+          .map(sanitizeProbeSignal)
+          .filter(Boolean)
+      };
+    }
+    if (messageType === "transport_request") {
+      return {
+        transport: sanitizeTransport(source.transport),
+        requestId: safeProbeToken(source.requestId, 80),
+        method: safeProbeToken(source.method, 20),
+        path: safeProbePath(source.path),
+        category: safeProbeToken(source.category, 40)
+      };
+    }
+    if (messageType === "transport_response") {
+      return {
+        transport: sanitizeTransport(source.transport),
+        requestId: safeProbeToken(source.requestId, 80),
+        path: safeProbePath(source.path),
+        status: safeProbeInteger(source.status, 999),
+        eventStream: Boolean(source.eventStream)
+      };
+    }
+    if (messageType === "transport_complete") {
+      return {
+        transport: sanitizeTransport(source.transport),
+        requestId: safeProbeToken(source.requestId, 80),
+        path: safeProbePath(source.path),
+        frames: safeProbeInteger(source.frames, 10000) ?? 0,
+        code: safeProbeInteger(source.code, 9999),
+        clean: typeof source.clean === "boolean" ? source.clean : null
+      };
+    }
+    if (messageType === "transport_error") {
+      return {
+        transport: sanitizeTransport(source.transport),
+        requestId: safeProbeToken(source.requestId, 80),
+        path: safeProbePath(source.path),
+        name: safeProbeToken(source.name, 60)
+      };
+    }
+    if (messageType === "probe_error") {
+      return {
+        stage: safeProbeToken(source.stage, 60),
+        name: safeProbeToken(source.name, 60),
+        requestId: safeProbeToken(source.requestId, 80),
+        path: safeProbePath(source.path)
+      };
+    }
+    return null;
+  }
+
+  function installProbeBridgeGuard() {
+    if (typeof window === "undefined" || typeof MessageEvent === "undefined") return;
+    if (globalThis[BRIDGE_GUARD_MARKER]) return;
+    globalThis[BRIDGE_GUARD_MARKER] = true;
+    const forwardedEvents = new WeakSet();
+    window.addEventListener("message", (event) => {
+      if (forwardedEvents.has(event)) return;
+      if (event.source !== window || event.origin !== location.origin) return;
+      const message = plainObject(event.data);
+      if (!message || message.channel !== BRIDGE_CHANNEL || message.direction !== "probe") return;
+      event.stopImmediatePropagation();
+      let serializedLength = Infinity;
+      try {
+        serializedLength = JSON.stringify(message).length;
+      } catch {}
+      if (serializedLength > 50000) return;
+      const token = safeProbeToken(message.token, 100);
+      const type = safeProbeToken(message.type, 40);
+      const payload = sanitizeProbeMessage(type, message.payload);
+      if (!token || !type || !payload) return;
+      const forwarded = new MessageEvent("message", {
+        data: {channel: BRIDGE_CHANNEL, direction: "probe", token, type, payload},
+        origin: location.origin,
+        source: window
+      });
+      forwardedEvents.add(forwarded);
+      window.dispatchEvent(forwarded);
+    }, true);
   }
 
   function isLikelySensitiveHref(href) {
@@ -215,6 +450,7 @@
   const api = {
     REDACTED,
     sanitizeText,
+    sanitizeProbeMessage,
     isLikelySensitiveHref,
     stableClassTokens,
     isSensitiveSurface,
@@ -224,5 +460,6 @@
     describeNode
   };
   globalThis.UiStateInspectorCore = Object.freeze(api);
+  installProbeBridgeGuard();
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();
