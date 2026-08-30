@@ -4,8 +4,8 @@ import path from "node:path";
 import test from "node:test";
 
 const manifest = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json", import.meta.url), "utf8"));
+const sidepanelHtml = fs.readFileSync(new URL("../extension/sidepanel.html", import.meta.url), "utf8");
 const sidepanelSource = fs.readFileSync(new URL("../extension/sidepanel.js", import.meta.url), "utf8");
-const bootstrapSource = fs.readFileSync(new URL("../extension/sidepanel-dev7-bootstrap.js", import.meta.url), "utf8");
 const contentSource = fs.readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
 const pageProbeSource = fs.readFileSync(new URL("../extension/page-probe.js", import.meta.url), "utf8");
 
@@ -39,11 +39,12 @@ test("loads the structure carrier between the protocol parser and passive page p
   assert.match(contentSource, /turn_state_transition/);
 });
 
-test("gates the dev7 sidepanel on the structure carrier before loading the recorder UI", () => {
-  assert.equal(manifest.side_panel.default_path, "sidepanel-dev7.html");
-  assert.match(bootstrapSource, /EXPECTED_CARRIER_BUILD\s*=\s*"0\.1\.3-dev7"/);
-  assert.match(bootstrapSource, /chrome\.tabs\.reload/);
-  assert.match(bootstrapSource, /sidepanel\.js/);
+test("loads the sidepanel UI immediately instead of gating page startup", () => {
+  assert.equal(manifest.side_panel.default_path, "sidepanel.html");
+  assert.match(sidepanelHtml, /<script src="sidepanel\.js"><\/script>/);
+  assert.doesNotMatch(sidepanelHtml, /sidepanel-(?:dev7-)?bootstrap\.js/);
+  assert.match(sidepanelSource, /EXPECTED_CARRIER_BUILD\s*=\s*"0\.1\.3-dev7"/);
+  assert.match(sidepanelSource, /startButton\.addEventListener/);
 });
 
 test("does not rely on a privileged tab URL and safely supports two-world fallback injection", () => {
@@ -51,7 +52,7 @@ test("does not rely on a privileged tab URL and safely supports two-world fallba
   assert.match(sidepanelSource, /chrome\.scripting\.executeScript/);
   assert.match(sidepanelSource, /world:\s*"MAIN"/);
   assert.match(sidepanelSource, /world:\s*"ISOLATED"/);
-  assert.match(sidepanelSource, /origin !== CHATGPT_ORIGIN/);
+  assert.match(sidepanelSource, /current\.origin !== CHATGPT_ORIGIN/);
   assert.match(contentSource, /__CHATGPT_UI_STATE_INSPECTOR_CONTENT_LOADED__/);
 });
 
