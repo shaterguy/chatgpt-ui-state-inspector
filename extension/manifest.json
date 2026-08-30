@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT UI State Inspector",
-  "version": "0.1.1",
-  "version_name": "0.1.1-dev5-work-websocket-identifiable",
+  "version": "0.1.2",
+  "version_name": "0.1.2-dev6-runtime-upgrade-gate",
   "description": "Record ChatGPT UI events, canonical turn states, and sanitized Work websocket protocol structure.",
   "minimum_chrome_version": "114",
   "permissions": [
