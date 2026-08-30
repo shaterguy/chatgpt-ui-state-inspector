@@ -2,6 +2,13 @@
   "use strict";
 
   const SAFE_TOKEN = /^[A-Za-z0-9_.:/-]{1,80}$/;
+  const MAX_SHAPE_PATHS = 96;
+  const MAX_STATE_CANDIDATES = 48;
+  const MAX_NESTED_JSON_PATHS = 24;
+  const MAX_STRUCTURE_DEPTH = 7;
+  const MAX_STRUCTURE_NODES = 320;
+  const MAX_NESTED_JSON_TEXT = 12000;
+  const STATE_KEY = /(?:^|_)(?:type|status|state|phase|event|marker|role|kind|op|action|finish_reason|end_turn|is_complete|content_type)$/i;
 
   function object(value) {
     return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -28,6 +35,110 @@
       if (token) return token;
     }
     return null;
+  }
+
+  function valueKind(value) {
+    if (value === null) return "null";
+    if (Array.isArray(value)) return "array";
+    return typeof value;
+  }
+
+  function pathKey(path, key) {
+    return SAFE_TOKEN.test(key) ? `${path}.${key}` : `${path}.[key]`;
+  }
+
+  function arrayLengthBucket(length) {
+    const count = Math.max(0, Number(length) || 0);
+    if (count === 0) return 0;
+    if (count <= 4) return 4;
+    if (count <= 16) return 16;
+    if (count <= 64) return 64;
+    return 65;
+  }
+
+  function stateCandidateValue(value) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 1000000) return value;
+    if (typeof value !== "string") return null;
+    const token = safeToken(value);
+    return token && token !== "[redacted]" ? token : null;
+  }
+
+  function maybeNestedJson(value) {
+    if (typeof value !== "string") return null;
+    const text = value.trim();
+    if (text.length < 2 || text.length > MAX_NESTED_JSON_TEXT) return null;
+    if (!((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]")))) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+
+  function summarizeStructure(payload) {
+    const keyPaths = [];
+    const stateCandidates = [];
+    const nestedJsonPaths = [];
+    let nodes = 0;
+
+    function pushPath(path, kind, extra = null) {
+      if (keyPaths.length >= MAX_SHAPE_PATHS) return;
+      keyPaths.push(extra ? {path, kind, ...extra} : {path, kind});
+    }
+
+    function walk(value, path, depth) {
+      if (nodes >= MAX_STRUCTURE_NODES || depth > MAX_STRUCTURE_DEPTH) return;
+      nodes += 1;
+      const kind = valueKind(value);
+      if (kind === "array") {
+        pushPath(path, kind, {lengthBucket: arrayLengthBucket(value.length)});
+        const limit = Math.min(value.length, 24);
+        for (let index = 0; index < limit; index += 1) {
+          walk(value[index], `${path}[${index}]`, depth + 1);
+        }
+        return;
+      }
+      if (kind === "object") {
+        pushPath(path, kind);
+        const entries = Object.entries(value).slice(0, 40);
+        for (const [key, child] of entries) {
+          const childPath = pathKey(path, key);
+          const childKind = valueKind(child);
+          pushPath(childPath, childKind);
+          if (STATE_KEY.test(key) && stateCandidates.length < MAX_STATE_CANDIDATES) {
+            const candidate = stateCandidateValue(child);
+            if (candidate !== null) stateCandidates.push({path: childPath, key, value: candidate, valueType: typeof candidate});
+          }
+          const nested = maybeNestedJson(child);
+          if (nested !== null && nestedJsonPaths.length < MAX_NESTED_JSON_PATHS) {
+            const nestedPath = `${childPath}::<json>`;
+            nestedJsonPaths.push(nestedPath);
+            walk(nested, nestedPath, depth + 1);
+          } else if (childKind === "object" || childKind === "array") {
+            walk(child, childPath, depth + 1);
+          }
+        }
+        return;
+      }
+      pushPath(path, kind);
+      const nested = maybeNestedJson(value);
+      if (nested !== null && nestedJsonPaths.length < MAX_NESTED_JSON_PATHS) {
+        const nestedPath = `${path}::<json>`;
+        nestedJsonPaths.push(nestedPath);
+        walk(nested, nestedPath, depth + 1);
+      }
+    }
+
+    walk(payload, "$", 0);
+    return {
+      rootKind: valueKind(payload),
+      rootArrayLengthBucket: Array.isArray(payload) ? arrayLengthBucket(payload.length) : null,
+      keyPaths,
+      stateCandidates,
+      nestedJsonPaths,
+      structureTruncated: nodes >= MAX_STRUCTURE_NODES || keyPaths.length >= MAX_SHAPE_PATHS
+    };
   }
 
   function findMessage(payload) {
@@ -75,6 +186,7 @@
     const errorCode = firstToken(root.error?.code, root.code, root.data?.error?.code);
     const normalizedType = String(type || "").toLowerCase();
     const normalizedStatus = String(status || "").toLowerCase();
+    const structure = summarizeStructure(payload);
     return {
       type,
       event,
@@ -90,6 +202,12 @@
       topLevelKeys: safeKeys(root),
       messageKeys: safeKeys(message),
       metadataKeys: safeKeys(metadata),
+      rootKind: structure.rootKind,
+      rootArrayLengthBucket: structure.rootArrayLengthBucket,
+      keyPaths: structure.keyPaths,
+      stateCandidates: structure.stateCandidates,
+      nestedJsonPaths: structure.nestedJsonPaths,
+      structureTruncated: structure.structureTruncated,
       byteLength: Math.max(0, Number(byteLength) || 0)
     };
   }
@@ -146,6 +264,12 @@
         topLevelKeys: [],
         messageKeys: [],
         metadataKeys: [],
+        rootKind: "string",
+        rootArrayLengthBucket: null,
+        keyPaths: [],
+        stateCandidates: [],
+        nestedJsonPaths: [],
+        structureTruncated: false,
         byteLength
       };
       return {summary, signals: []};
@@ -170,6 +294,12 @@
           topLevelKeys: [],
           messageKeys: [],
           metadataKeys: [],
+          rootKind: "string",
+          rootArrayLengthBucket: null,
+          keyPaths: [],
+          stateCandidates: [],
+          nestedJsonPaths: [],
+          structureTruncated: false,
           byteLength,
           parseError: true
         },
@@ -178,7 +308,7 @@
     }
   }
 
-  const api = Object.freeze({safeToken, safeKeys, summarizePayload, detectSignals, summarizeSseData});
+  const api = Object.freeze({safeToken, safeKeys, summarizeStructure, summarizePayload, detectSignals, summarizeSseData});
   globalThis.UiStateInspectorProtocol = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();
