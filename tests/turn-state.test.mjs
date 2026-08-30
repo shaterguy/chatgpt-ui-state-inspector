@@ -9,10 +9,14 @@ context.globalThis = context;
 vm.runInNewContext(source, context, {filename: "turn-state.js"});
 const TurnState = context.module.exports;
 
-test("tracks trusted submit, protocol first token, and completion", () => {
+test("keeps first-token metadata in THINKING until current-turn output is visible", () => {
   const tracker = TurnState.createTracker();
   assert.equal(tracker.ingest("PROMPT_SUBMITTED", {source: "dom-click"}).state.phase, "THINKING");
-  assert.equal(tracker.ingest("FIRST_VISIBLE_TOKEN", {source: "protocol"}).state.phase, "ANSWERING");
+  const marker = tracker.ingest("FIRST_VISIBLE_TOKEN", {source: "protocol"});
+  assert.equal(marker.state.phase, "THINKING");
+  assert.ok(marker.state.firstVisibleTokenAt);
+  assert.equal(marker.state.sawVisibleAnswer, false);
+  assert.equal(tracker.ingest("VISIBLE_ANSWER", {source: "dom"}).state.phase, "ANSWERING");
   assert.equal(tracker.ingest("STREAM_COMPLETE", {source: "protocol"}).state.phase, "COMPLETE");
 });
 
@@ -39,22 +43,22 @@ test("allows explicit thinking live status as a recovery start", () => {
   assert.equal(result.state.turnSequence, 1);
 });
 
-test("does not let background fetch preparation start a turn", () => {
+test("allows a filtered canonical fetch to begin the next turn", () => {
   const tracker = TurnState.createTracker();
-  const result = tracker.ingest("PROMPT_SUBMITTED", {
-    source: "fetch",
-    confidence: 0.9,
-    reason: "conversation request observed"
-  });
-  assert.equal(result.state.phase, "IDLE");
-  assert.equal(result.state.turnSequence, 0);
+  tracker.ingest("PROMPT_SUBMITTED", {source: "dom-click"});
+  tracker.ingest("DOM_COMPLETE", {source: "dom"});
+  const next = tracker.ingest("PROMPT_SUBMITTED", {source: "fetch"});
+  assert.equal(next.state.phase, "THINKING");
+  assert.equal(next.state.turnSequence, 2);
 });
 
-test("first visible token can recover when the start event was missed", () => {
+test("first visible token can recover a missed start without claiming rendered output", () => {
   const tracker = TurnState.createTracker();
   const result = tracker.ingest("FIRST_VISIBLE_TOKEN", {source: "protocol"});
-  assert.deepEqual(Array.from(result.transitions, (item) => item.phase), ["THINKING", "ANSWERING"]);
+  assert.deepEqual(Array.from(result.transitions, (item) => item.phase), ["THINKING"]);
   assert.equal(result.state.turnSequence, 1);
+  assert.equal(result.state.phase, "THINKING");
+  assert.equal(result.state.sawVisibleAnswer, false);
 });
 
 test("DOM-only visible answer requires an already active turn", () => {
@@ -67,21 +71,16 @@ test("DOM-only visible answer requires an already active turn", () => {
   assert.equal(answering.state.phase, "ANSWERING");
 });
 
-test("completion remains complete despite captured post-response noise", () => {
+test("completion remains complete despite weak post-response DOM noise", () => {
   const tracker = TurnState.createTracker();
   tracker.ingest("PROMPT_SUBMITTED", {source: "dom-click"});
-  tracker.ingest("FIRST_VISIBLE_TOKEN", {source: "protocol"});
+  tracker.ingest("VISIBLE_ANSWER", {source: "dom"});
   tracker.ingest("STREAM_COMPLETE", {source: "protocol"});
 
   tracker.ingest("GENERATION_ACTIVE", {
     source: "dom",
     confidence: 0.82,
     reason: "generation control is active"
-  });
-  tracker.ingest("PROMPT_SUBMITTED", {
-    source: "fetch",
-    confidence: 0.9,
-    reason: "conversation request observed"
   });
   tracker.ingest("VISIBLE_ANSWER", {source: "dom"});
 
@@ -97,15 +96,34 @@ test("ignores completion noise when no turn is active", () => {
   assert.equal(result.changed, false);
 });
 
-test("starts a new monotonic turn after completion only from trusted submit", () => {
+test("starts a new monotonic turn after completion from trusted submit", () => {
   const tracker = TurnState.createTracker();
   tracker.ingest("PROMPT_SUBMITTED", {source: "dom-click"});
   tracker.ingest("STREAM_COMPLETE", {source: "protocol"});
-  tracker.ingest("PROMPT_SUBMITTED", {source: "fetch"});
-  assert.equal(tracker.snapshot().phase, "COMPLETE");
   const next = tracker.ingest("PROMPT_SUBMITTED", {source: "dom-submit"});
   assert.equal(next.state.phase, "THINKING");
   assert.equal(next.state.turnSequence, 2);
+});
+
+test("recognizes only canonical conversation request paths", () => {
+  assert.equal(TurnState.isCanonicalConversationPath("/backend-api/f/conversation"), true);
+  assert.equal(TurnState.isCanonicalConversationPath("/backend-api/f/responses"), true);
+  assert.equal(TurnState.isCanonicalConversationPath("/backend-api/f/conversation/prepare"), false);
+  assert.equal(TurnState.isCanonicalConversationPath("/backend-api/f/conversation/abc"), false);
+});
+
+test("classifies Work status and lets explicit completion override stale generation controls", () => {
+  assert.equal(TurnState.classifyLiveStatus("작업 중"), "thinking");
+  assert.equal(TurnState.classifyLiveStatus("응답 완료"), "complete");
+  assert.equal(TurnState.isDomGenerationActive({statusKind: "complete", stopButton: true, streamMarker: true}), false);
+  assert.equal(TurnState.isDomGenerationActive({statusKind: "thinking", stopButton: false, streamMarker: false}), true);
+});
+
+test("new assistant output excludes stale previous-turn text and accepts replaced roots", () => {
+  assert.equal(TurnState.hasNewAssistantOutput(1, 1, true, false), false);
+  assert.equal(TurnState.hasNewAssistantOutput(2, 1, true, false), true);
+  assert.equal(TurnState.hasNewAssistantOutput(1, 1, true, true), true);
+  assert.equal(TurnState.hasNewAssistantOutput(2, 1, false, true), false);
 });
 
 test("hydrates the last persisted canonical state", () => {
