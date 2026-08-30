@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT UI State Inspector",
-  "version": "0.1.2",
-  "version_name": "0.1.2-dev6-runtime-upgrade-gate",
+  "version": "0.1.3",
+  "version_name": "0.1.3-dev7-structure-carrier",
   "description": "Record ChatGPT UI events, canonical turn states, and sanitized Work websocket protocol structure.",
   "minimum_chrome_version": "114",
   "permissions": [
@@ -19,7 +19,7 @@
     "service_worker": "background.js"
   },
   "side_panel": {
-    "default_path": "sidepanel.html"
+    "default_path": "sidepanel-dev7.html"
   },
   "content_scripts": [
     {
@@ -28,6 +28,7 @@
       ],
       "js": [
         "lib/protocol.js",
+        "lib/protocol-structure-carrier.js",
         "page-probe.js"
       ],
       "run_at": "document_start",
