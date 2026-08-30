@@ -10,6 +10,11 @@
   --danger: #b42318;
   --danger-hover: #912018;
   --soft: #e9f7f4;
+  --phase-idle: #667085;
+  --phase-thinking: #9a6700;
+  --phase-answering: #175cd3;
+  --phase-complete: #067647;
+  --phase-error: #b42318;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 * { box-sizing: border-box; }
@@ -73,6 +78,24 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   font-size: 12px;
   line-height: 1.4;
 }
+.status[data-kind="error"] { color: var(--phase-error); }
+.phase-panel {
+  display: grid;
+  gap: 3px;
+  margin-top: 9px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--phase-idle);
+  border-radius: 9px;
+  padding: 10px 11px;
+  background: color-mix(in srgb, var(--card) 92%, var(--phase-idle));
+}
+.phase-panel[data-phase="THINKING"] { border-left-color: var(--phase-thinking); }
+.phase-panel[data-phase="ANSWERING"] { border-left-color: var(--phase-answering); }
+.phase-panel[data-phase="COMPLETE"] { border-left-color: var(--phase-complete); }
+.phase-panel[data-phase="ERROR"] { border-left-color: var(--phase-error); }
+.phase-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; }
+.phase-panel strong { font-size: 13px; }
+.phase-panel #phase-meta { color: var(--muted); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
 .recent { margin: 8px 0 0; padding-left: 24px; font-size: 11px; color: var(--muted); }
 .recent:empty { display: none; }
 .section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

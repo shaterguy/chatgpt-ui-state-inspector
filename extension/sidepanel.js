@@ -4,6 +4,9 @@ const titleInput = document.querySelector("#session-title");
 const startButton = document.querySelector("#start");
 const stopButton = document.querySelector("#stop");
 const statusNode = document.querySelector("#live-status");
+const phasePanel = document.querySelector("#turn-phase");
+const phaseCode = document.querySelector("#phase-code");
+const phaseMeta = document.querySelector("#phase-meta");
 const recentNode = document.querySelector("#recent-events");
 const sessionsNode = document.querySelector("#sessions");
 const refreshButton = document.querySelector("#refresh");
@@ -11,6 +14,14 @@ const template = document.querySelector("#session-template");
 let currentTabId = null;
 const CHATGPT_ORIGIN = "https://chatgpt.com";
 const CHATGPT_TAB_ERROR = "활성 탭이 https://chatgpt.com인지 확인해 주세요.";
+const EXPECTED_PROTOCOL_VERSION = "1.1.0";
+const PHASE_LABELS = Object.freeze({
+  IDLE: "대기",
+  THINKING: "추론 중",
+  ANSWERING: "답변 작성 중",
+  COMPLETE: "답변 완료",
+  ERROR: "오류"
+});
 
 async function activeChatGptTab() {
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
@@ -30,7 +41,10 @@ async function probeRecorder(tabId) {
 
 async function ensureContentScript(tabId) {
   const existing = await probeRecorder(tabId);
-  if (existing) return existing;
+  if (existing?.result?.protocolVersion === EXPECTED_PROTOCOL_VERSION) return existing;
+  if (existing) {
+    throw new Error("이 탭에는 이전 버전 기록기가 연결되어 있습니다. ChatGPT 탭을 새로고침한 뒤 다시 시작해 주세요.");
+  }
 
   let origin = null;
   try {
@@ -46,11 +60,17 @@ async function ensureContentScript(tabId) {
 
   await chrome.scripting.executeScript({
     target: {tabId},
-    files: ["lib/core.js", "content.js"]
+    files: ["lib/protocol.js", "page-probe.js"],
+    world: "MAIN"
+  });
+  await chrome.scripting.executeScript({
+    target: {tabId},
+    files: ["lib/core.js", "lib/turn-state.js", "content.js"],
+    world: "ISOLATED"
   });
   const injected = await probeRecorder(tabId);
-  if (!injected) {
-    throw new Error("ChatGPT 탭에 기록기를 연결하지 못했습니다. 탭을 새로고침한 뒤 다시 시도해 주세요.");
+  if (!injected || injected.result?.protocolVersion !== EXPECTED_PROTOCOL_VERSION) {
+    throw new Error("ChatGPT 탭에 상태 기록기를 연결하지 못했습니다. 탭을 새로고침한 뒤 다시 시도해 주세요.");
   }
   return injected;
 }
@@ -64,6 +84,22 @@ async function sendToActiveTab(message) {
 function setStatus(message, kind = "normal") {
   statusNode.textContent = message;
   statusNode.dataset.kind = kind;
+}
+
+function renderTurnState(state, probe) {
+  const phase = PHASE_LABELS[state?.phase] ? state.phase : "IDLE";
+  const label = PHASE_LABELS[phase];
+  phasePanel.dataset.phase = phase;
+  phaseCode.textContent = `${phase} · ${label}`;
+  const source = state?.source || "-";
+  const confidence = Number.isFinite(Number(state?.confidence))
+    ? `${Math.round(Number(state.confidence) * 100)}%`
+    : "-";
+  const transport = probe?.ready
+    ? Object.entries(probe.transports || {}).filter(([, value]) => value).map(([key]) => key).join("+") || "DOM"
+    : "연결 대기";
+  const frameCount = Number(probe?.protocolFrameCount) || 0;
+  phaseMeta.textContent = `source=${source} · confidence=${confidence} · probe=${transport} · frames=${frameCount}`;
 }
 
 function formatDate(value) {
@@ -95,7 +131,7 @@ function targetSummary(event) {
 
 function serialize(session, format) {
   const payload = {
-    schema: "chatgpt-ui-state-inspector/session@1.0.0",
+    schema: "chatgpt-ui-state-inspector/session@1.1.0",
     exportedAt: new Date().toISOString(),
     meta: session.meta,
     events: session.events
@@ -122,8 +158,10 @@ function serialize(session, format) {
     "",
     `- Title: ${payload.meta.title}`,
     `- Session ID: ${payload.meta.id}`,
+    `- Protocol: ${payload.meta.protocolVersion || "1.0.0"}`,
     `- Started: ${payload.meta.startedAt}`,
     `- Completed: ${payload.meta.completedAt || "recording"}`,
+    `- Last turn phase: ${payload.meta.lastTurnState?.phase || "IDLE"}`,
     `- Events: ${payload.events.length}`,
     `- Exported: ${payload.exportedAt}`,
     "",
@@ -159,9 +197,8 @@ async function exportSession(id, format, button) {
       json: "application/json", jsonl: "application/x-ndjson",
       csv: "text/csv", md: "text/markdown"
     }[format];
-    const extension = format;
     downloadText(
-      `${safeFilename(session.meta.title)}_${session.meta.id.slice(0, 8)}.${extension}`,
+      `${safeFilename(session.meta.title)}_${session.meta.id.slice(0, 8)}.${format}`,
       serialize(session, format),
       `${mime};charset=utf-8`
     );
@@ -192,8 +229,9 @@ async function renderSessions() {
   for (const session of sessions) {
     const fragment = template.content.cloneNode(true);
     fragment.querySelector(".session-title").textContent = session.title;
+    const phase = session.lastTurnState?.phase || "IDLE";
     fragment.querySelector(".session-meta").textContent =
-      `${formatDate(session.startedAt)} · ${session.eventCount}개 이벤트`;
+      `${formatDate(session.startedAt)} · ${session.eventCount}개 이벤트 · ${phase}`;
     const badge = fragment.querySelector(".badge");
     badge.textContent = session.status === "recording" ? "기록 중" : "완료";
     const select = fragment.querySelector(".format");
@@ -222,19 +260,21 @@ async function refreshLive() {
     startButton.disabled = state.active;
     stopButton.disabled = !state.active;
     titleInput.disabled = state.active;
+    renderTurnState(state.turnState, state.probe);
     setStatus(state.active
-      ? `“${state.title}” 기록 중 · 현재 순번 ${state.seq}`
+      ? `“${state.title}” 기록 중 · #${state.seq} · ${state.turnState?.phase || "IDLE"}`
       : "대기 중");
     recentNode.replaceChildren();
     for (const item of state.recent.slice().reverse()) {
       const li = document.createElement("li");
-      li.textContent = `#${item.seq} ${item.type}`;
+      li.textContent = `#${item.seq} ${item.label || item.type}`;
       recentNode.append(li);
     }
   } catch (error) {
     startButton.disabled = false;
     stopButton.disabled = true;
     titleInput.disabled = false;
+    renderTurnState(null, null);
     setStatus(error.message || CHATGPT_TAB_ERROR, "error");
     recentNode.replaceChildren();
   }

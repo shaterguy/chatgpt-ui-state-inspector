@@ -54,7 +54,8 @@ async function createSession(message, sender) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const meta = {
-    schemaVersion: "1.0.0",
+    schemaVersion: "1.1.0",
+    protocolVersion: "1.1.0",
     id,
     title,
     status: "recording",
@@ -66,10 +67,13 @@ async function createSession(message, sender) {
     eventCount: 0,
     lastSeq: 0,
     nextChunk: 0,
+    lastTurnState: null,
     exportFormats: ["json", "jsonl", "csv", "md"],
     privacy: {
       inputValuesCaptured: false,
       messageBodiesCaptured: false,
+      networkPayloadsCaptured: false,
+      protocolMetadataCaptured: true,
       networkTransmission: false
     }
   };
@@ -95,18 +99,20 @@ async function appendEvents(message, sender) {
     if (meta.tabId !== sender.tab.id) throw new Error("Session tab mismatch.");
     const chunkIndex = meta.nextChunk;
     const lastSeq = events.reduce((max, event) => Math.max(max, Number(event.seq) || 0), meta.lastSeq || 0);
+    const latestTransition = events.slice().reverse().find((event) => event?.type === "turn_state_transition" && event?.state);
     const updated = {
       ...meta,
       eventCount: meta.eventCount + events.length,
       lastSeq,
       nextChunk: chunkIndex + 1,
+      lastTurnState: latestTransition?.state || meta.lastTurnState || null,
       updatedAt: new Date().toISOString()
     };
     await chrome.storage.local.set({
       [chunkKey(id, chunkIndex)]: events,
       [key]: updated
     });
-    return {eventCount: updated.eventCount, lastSeq};
+    return {eventCount: updated.eventCount, lastSeq, lastTurnState: updated.lastTurnState};
   });
 }
 
