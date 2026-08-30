@@ -15,7 +15,8 @@ let currentTabId = null;
 let preparationActive = false;
 let statusHoldUntil = 0;
 const CHATGPT_ORIGIN = "https://chatgpt.com";
-const CHATGPT_TAB_ERROR = "활성 탭이 https://chatgpt.com인지 확인해 주세요.";
+const ACTIVE_TAB_ERROR = "활성 브라우저 탭을 찾지 못했습니다.";
+const RECORDER_UNREACHABLE = "ChatGPT 탭의 기록기와 통신할 수 없습니다. chrome://extensions에서 이 확장 프로그램의 사이트 액세스가 chatgpt.com에서 허용되어 있는지 확인해 주세요.";
 const EXPECTED_PROTOCOL_VERSION = "1.1.0";
 const EXPECTED_CARRIER_BUILD = "0.1.3-dev7";
 const SCRIPT_CALL_TIMEOUT_MS = 1200;
@@ -44,8 +45,15 @@ function withTimeout(promise, ms, message) {
 }
 
 async function activeChatGptTab() {
-  const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
-  if (!Number.isInteger(tab?.id)) throw new Error(CHATGPT_TAB_ERROR);
+  let tabs = await chrome.tabs.query({active: true, currentWindow: true});
+  if (!tabs?.some((tab) => Number.isInteger(tab?.id))) {
+    tabs = await chrome.tabs.query({active: true, lastFocusedWindow: true});
+  }
+  if (!tabs?.some((tab) => Number.isInteger(tab?.id))) {
+    tabs = await chrome.tabs.query({active: true});
+  }
+  const tab = tabs?.find((item) => Number.isInteger(item?.id)) || null;
+  if (!tab) throw new Error(ACTIVE_TAB_ERROR);
   currentTabId = tab.id;
   return tab;
 }
@@ -63,28 +71,14 @@ async function probeRecorder(tabId) {
   }
 }
 
-async function mainWorldSnapshot(tabId) {
+async function probeHandshake(tabId) {
   try {
-    const result = await withTimeout(
-      chrome.scripting.executeScript({
-        target: {tabId},
-        world: "MAIN",
-        func: () => ({
-          origin: location.origin,
-          carrier: globalThis.__CHATGPT_UI_STATE_INSPECTOR_STRUCTURE_CARRIER__ || null,
-          parserBuildId: (() => {
-            try {
-              return globalThis.UiStateInspectorProtocol?.summarizePayload?.({})?.buildId || null;
-            } catch {
-              return null;
-            }
-          })()
-        })
-      }),
+    const response = await withTimeout(
+      chrome.tabs.sendMessage(tabId, {type: "GET_INSPECTOR_HANDSHAKE"}),
       SCRIPT_CALL_TIMEOUT_MS,
-      "ChatGPT 페이지 계측기 확인 시간이 초과되었습니다."
+      "계측기 핸드셰이크 응답 시간이 초과되었습니다."
     );
-    return result?.[0]?.result || null;
+    return response?.ok ? response.result : null;
   } catch {
     return null;
   }
@@ -93,57 +87,49 @@ async function mainWorldSnapshot(tabId) {
 async function waitForCarrier(tabId) {
   const deadline = Date.now() + CARRIER_WAIT_MS;
   while (Date.now() < deadline) {
-    const state = await mainWorldSnapshot(tabId);
-    if (state?.origin === CHATGPT_ORIGIN && state.carrier === EXPECTED_CARRIER_BUILD) return true;
+    const state = await probeHandshake(tabId);
+    if (state?.origin === CHATGPT_ORIGIN && state.carrier === EXPECTED_CARRIER_BUILD) return state;
     await delay(CARRIER_POLL_MS);
   }
-  return false;
+  return null;
 }
 
 async function ensureCarrierReady(tabId) {
-  const current = await mainWorldSnapshot(tabId);
-  if (!current) throw new Error(CHATGPT_TAB_ERROR);
-  if (current.origin !== CHATGPT_ORIGIN) throw new Error(CHATGPT_TAB_ERROR);
-  if (current.carrier === EXPECTED_CARRIER_BUILD) return current;
+  const current = await probeHandshake(tabId);
+  if (current?.origin === CHATGPT_ORIGIN && current.carrier === EXPECTED_CARRIER_BUILD) return current;
 
-  setStatus("최신 Work 계측기를 적용하기 위해 ChatGPT 탭을 한 번 새로고침합니다.");
-  await withTimeout(
-    chrome.tabs.reload(tabId),
-    2000,
-    "ChatGPT 탭 새로고침 요청 시간이 초과되었습니다."
-  );
-  const ready = await waitForCarrier(tabId);
-  if (!ready) {
-    throw new Error("Work 계측기 연결 확인에 실패했습니다. ChatGPT 탭을 직접 새로고침한 뒤 기록 시작을 다시 눌러 주세요.");
+  setStatus(current
+    ? "최신 Work 계측기를 적용하기 위해 ChatGPT 탭을 한 번 새로고침합니다."
+    : "ChatGPT 기록기 연결을 복구하기 위해 탭을 한 번 새로고침합니다.");
+  try {
+    await withTimeout(
+      chrome.tabs.reload(tabId),
+      2000,
+      "ChatGPT 탭 새로고침 요청 시간이 초과되었습니다."
+    );
+  } catch {
+    throw new Error("ChatGPT 탭 새로고침을 요청하지 못했습니다. 탭을 직접 새로고침한 뒤 다시 시도해 주세요.");
   }
-  return mainWorldSnapshot(tabId);
+
+  const ready = await waitForCarrier(tabId);
+  if (ready) return ready;
+
+  const after = await probeHandshake(tabId);
+  if (!after) throw new Error(RECORDER_UNREACHABLE);
+  if (after.origin !== CHATGPT_ORIGIN) {
+    throw new Error("확장 기록기가 응답한 탭이 chatgpt.com이 아닙니다. ChatGPT 탭을 활성화한 뒤 다시 시도해 주세요.");
+  }
+  throw new Error(`Work 계측기 버전 확인에 실패했습니다. 감지=${after.carrier || "없음"}, 필요=${EXPECTED_CARRIER_BUILD}`);
 }
 
 async function ensureContentScript(tabId) {
   await ensureCarrierReady(tabId);
-
   const existing = await probeRecorder(tabId);
   if (existing?.result?.protocolVersion === EXPECTED_PROTOCOL_VERSION) return existing;
   if (existing) {
-    throw new Error("이 탭에는 이전 버전 기록기가 연결되어 있습니다. ChatGPT 탭을 새로고침한 뒤 다시 시작해 주세요.");
+    throw new Error("이 탭에는 이전 버전 기록기가 연결되어 있습니다. ChatGPT 탭을 한 번 새로고침한 뒤 다시 시작해 주세요.");
   }
-
-  await chrome.scripting.executeScript({
-    target: {tabId},
-    files: ["lib/protocol.js", "lib/protocol-structure-carrier.js", "page-probe.js"],
-    world: "MAIN"
-  });
-  await chrome.scripting.executeScript({
-    target: {tabId},
-    files: ["lib/core.js", "lib/turn-state.js", "content.js"],
-    world: "ISOLATED"
-  });
-
-  const injected = await probeRecorder(tabId);
-  if (!injected || injected.result?.protocolVersion !== EXPECTED_PROTOCOL_VERSION) {
-    throw new Error("ChatGPT 탭에 상태 기록기를 연결하지 못했습니다. 탭을 새로고침한 뒤 다시 시도해 주세요.");
-  }
-  return injected;
+  throw new Error(RECORDER_UNREACHABLE);
 }
 
 async function sendToActiveTab(message) {
@@ -333,7 +319,7 @@ async function refreshLive() {
       titleInput.disabled = false;
       renderTurnState(null, null);
       if (Date.now() >= statusHoldUntil) {
-        setStatus("대기 중 · 기록 시작을 누르면 계측기를 연결합니다.");
+        setStatus("대기 중 · 기록 시작을 누르면 ChatGPT 기록기 연결을 확인합니다.");
         phaseMeta.textContent = "기록 시작 전";
       }
       recentNode.replaceChildren();
@@ -348,7 +334,7 @@ async function refreshLive() {
     if (Date.now() >= statusHoldUntil) {
       setStatus(state.active
         ? `“${state.title}” 기록 중 · #${state.seq} · ${state.turnState?.phase || "IDLE"}`
-        : "대기 중 · 계측기 연결됨");
+        : "대기 중 · ChatGPT 기록기 연결됨");
     }
     recentNode.replaceChildren();
     for (const item of state.recent.slice().reverse()) {
@@ -361,7 +347,7 @@ async function refreshLive() {
     stopButton.disabled = true;
     titleInput.disabled = false;
     renderTurnState(null, null);
-    if (Date.now() >= statusHoldUntil) setStatus(error.message || CHATGPT_TAB_ERROR, "error");
+    if (Date.now() >= statusHoldUntil) setStatus(error.message || ACTIVE_TAB_ERROR, "error");
     recentNode.replaceChildren();
   }
 }
@@ -375,7 +361,7 @@ startButton.addEventListener("click", async () => {
     const title = titleInput.value.replace(/\s+/g, " ").trim();
     if (!title) throw new Error("기록 제목을 입력해 주세요.");
     const tab = await activeChatGptTab();
-    setStatus("계측기 연결 확인 중");
+    setStatus("ChatGPT 기록기 핸드셰이크 확인 중");
     await ensureContentScript(tab.id);
     setStatus("계측기 연결 완료 · 기록을 시작합니다.");
     const created = await chrome.runtime.sendMessage({type: "CREATE_SESSION", title, tabId: tab.id});
