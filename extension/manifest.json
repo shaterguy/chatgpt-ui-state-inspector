@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT UI State Inspector",
-  "version": "0.1.4",
-  "version_name": "0.1.4-dev8-nonblocking-carrier-check",
+  "version": "0.1.5",
+  "version_name": "0.1.5-dev9-message-handshake",
   "description": "Record ChatGPT UI events, canonical turn states, and sanitized Work websocket protocol structure.",
   "minimum_chrome_version": "114",
   "permissions": [
@@ -41,7 +41,8 @@
       "js": [
         "lib/core.js",
         "lib/turn-state.js",
-        "content.js"
+        "content.js",
+        "handshake.js"
       ],
       "run_at": "document_start",
       "world": "ISOLATED"
