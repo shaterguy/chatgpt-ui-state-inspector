@@ -5,6 +5,7 @@ import test from "node:test";
 const probe = fs.readFileSync(new URL("../extension/page-probe.js", import.meta.url), "utf8");
 const protocol = fs.readFileSync(new URL("../extension/lib/protocol.js", import.meta.url), "utf8");
 const core = fs.readFileSync(new URL("../extension/lib/core.js", import.meta.url), "utf8");
+const content = fs.readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
 
 test("MAIN-world probe has no extension API or persistent browser storage access", () => {
   assert.doesNotMatch(probe, /\bchrome\s*\./);
@@ -31,4 +32,17 @@ test("isolated world stops and allowlist-reissues every page probe message", () 
   assert.match(core, /stopImmediatePropagation\(\)/);
   assert.match(core, /new MessageEvent\("message"/);
   assert.match(core, /forwardedEvents\.add/);
+});
+
+test("content correlates prompt signals to exact request paths before starting a turn", () => {
+  assert.match(content, /protocolRequestPaths/);
+  assert.match(content, /isCanonicalConversationPath\(requestPath\)/);
+  assert.match(content, /canonicalConversationRequest/);
+  assert.match(content, /payload\.source === "fetch" && canonicalConversationRequest/);
+});
+
+test("content requires a current-turn assistant root before DOM answer transition", () => {
+  assert.match(content, /assistantBaselineRoot/);
+  assert.match(content, /currentRoot !== assistantBaselineRoot/);
+  assert.match(content, /hasNewAssistantOutput/);
 });
