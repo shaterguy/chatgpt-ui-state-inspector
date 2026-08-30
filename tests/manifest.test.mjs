@@ -7,6 +7,7 @@ const manifest = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json"
 const sidepanelHtml = fs.readFileSync(new URL("../extension/sidepanel.html", import.meta.url), "utf8");
 const sidepanelSource = fs.readFileSync(new URL("../extension/sidepanel.js", import.meta.url), "utf8");
 const handshakeSource = fs.readFileSync(new URL("../extension/handshake.js", import.meta.url), "utf8");
+const carrierSource = fs.readFileSync(new URL("../extension/lib/protocol-structure-carrier.js", import.meta.url), "utf8");
 const contentSource = fs.readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
 const pageProbeSource = fs.readFileSync(new URL("../extension/page-probe.js", import.meta.url), "utf8");
 
@@ -45,6 +46,9 @@ test("loads the structure carrier and isolated handshake around the existing rec
   assert.match(contentSource, /turn_state_transition/);
   assert.match(handshakeSource, /GET_INSPECTOR_HANDSHAKE/);
   assert.match(handshakeSource, /data-ui-state-inspector-carrier/);
+  assert.match(handshakeSource, /data-ui-state-inspector-decoder/);
+  assert.match(carrierSource, /DECODER_BUILD = "0\.1\.6-dev10"/);
+  assert.match(carrierSource, /encoded_item/);
 });
 
 test("loads the sidepanel UI immediately and verifies readiness by extension messaging", () => {
