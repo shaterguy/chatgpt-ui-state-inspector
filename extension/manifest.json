@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT UI State Inspector",
-  "version": "0.1.5",
-  "version_name": "0.1.5-dev9-message-handshake",
+  "version": "0.1.6",
+  "version_name": "0.1.6-dev10-work-encoded-item-probe",
   "description": "Record ChatGPT UI events, canonical turn states, and sanitized Work websocket protocol structure.",
   "minimum_chrome_version": "114",
   "permissions": [
