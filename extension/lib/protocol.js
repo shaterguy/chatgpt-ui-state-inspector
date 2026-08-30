@@ -1,6 +1,7 @@
 (() => {
   "use strict";
 
+  const BUILD_ID = "0.1.1-dev5";
   const SAFE_TOKEN = /^[A-Za-z0-9_.:/-]{1,80}$/;
   const MAX_SHAPE_PATHS = 96;
   const MAX_STATE_CANDIDATES = 48;
@@ -188,6 +189,7 @@
     const normalizedStatus = String(status || "").toLowerCase();
     const structure = summarizeStructure(payload);
     return {
+      buildId: BUILD_ID,
       type,
       event,
       marker,
@@ -250,6 +252,7 @@
     const byteLength = data.length;
     if (data.trim() === "[DONE]") {
       const summary = {
+        buildId: BUILD_ID,
         type: "sse_done",
         event: null,
         marker: null,
@@ -280,6 +283,7 @@
     } catch {
       return {
         summary: {
+          buildId: BUILD_ID,
           type: "unparsed_frame",
           event: null,
           marker: null,
