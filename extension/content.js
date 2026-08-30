@@ -33,7 +33,9 @@
   let domScanTimer = null;
   let lastDomState = null;
   let assistantBaselineCount = 0;
+  let assistantBaselineRoot = null;
   let protocolFrameCount = 0;
+  let protocolRequestPaths = new Map();
   let turnTracker = TurnState.createTracker();
   const recent = [];
   const probe = {ready: false, enabled: false, transports: null};
@@ -243,10 +245,7 @@
   }
 
   function classifyStatus(text) {
-    const value = String(text || "");
-    if (/\b(thinking|reasoning|working|generating)\b|생각|추론|작성 중|응답 중/i.test(value)) return "thinking";
-    if (/response complete|generation complete|finished|응답 완료|답변 완료|완료됨/i.test(value)) return "complete";
-    return "other";
+    return TurnState.classifyLiveStatus(text);
   }
 
   function domStateSnapshot() {
@@ -258,7 +257,11 @@
     const streamMarker = [...document.querySelectorAll("[class*='group-data-stream'], [data-state='streaming']")].find(isVisible);
     const completionAction = Boolean(latest?.querySelector?.("[data-testid='copy-turn-action-button']"));
     const state = {
-      generationActive: Boolean(stopButton || streamMarker || statusKind === "thinking"),
+      generationActive: TurnState.isDomGenerationActive({
+        statusKind,
+        stopButton: Boolean(stopButton),
+        streamMarker: Boolean(streamMarker)
+      }),
       statusText,
       statusKind,
       assistantTurnCount: assistants.length,
@@ -277,9 +280,15 @@
     }, 80);
   }
 
+  function setAssistantBaseline() {
+    const assistants = assistantNodes();
+    assistantBaselineCount = assistants.length;
+    assistantBaselineRoot = assistants.at(-1) || null;
+  }
+
   function notePromptSubmitted(source, reason, confidence = 0.86) {
     const phase = turnTracker.snapshot().phase;
-    if (phase !== "THINKING" && phase !== "ANSWERING") assistantBaselineCount = assistantNodes().length;
+    if (phase !== "THINKING" && phase !== "ANSWERING") setAssistantBaseline();
     return ingestStateSignal("PROMPT_SUBMITTED", {source, reason, confidence});
   }
 
@@ -303,7 +312,7 @@
 
     const phaseBefore = turnTracker.snapshot().phase;
     if (current.generationActive && phaseBefore !== "THINKING" && phaseBefore !== "ANSWERING") {
-      assistantBaselineCount = Math.max(0, current.assistantTurnCount - (current.assistantVisibleAnswer ? 1 : 0));
+      setAssistantBaseline();
       ingestStateSignal("GENERATION_ACTIVE", {
         source: "dom",
         reason: current.statusKind === "thinking" ? "live status reports thinking" : "generation control is active",
@@ -311,13 +320,18 @@
       });
     }
 
-    const currentPhase = turnTracker.snapshot().phase;
-    const currentTurnVisible = current.assistantTurnCount > assistantBaselineCount || currentPhase === "THINKING" || currentPhase === "ANSWERING";
-    if (current.assistantVisibleAnswer && currentTurnVisible && !turnTracker.snapshot().sawVisibleAnswer) {
+    const currentRoot = latestAssistantRoot();
+    const currentTurnVisible = TurnState.hasNewAssistantOutput(
+      current.assistantTurnCount,
+      assistantBaselineCount,
+      current.assistantVisibleAnswer,
+      Boolean(currentRoot && currentRoot !== assistantBaselineRoot)
+    );
+    if (currentTurnVisible && !turnTracker.snapshot().sawVisibleAnswer) {
       ingestStateSignal("VISIBLE_ANSWER", {
         source: "dom",
-        reason: "latest assistant turn has visible rendered text",
-        confidence: 0.84
+        reason: "current turn has new visible assistant output",
+        confidence: 0.94
       });
     }
 
@@ -327,19 +341,19 @@
         ingestStateSignal("DOM_COMPLETE", {
           source: "dom",
           reason: "live status reports response complete",
-          confidence: 0.92
+          confidence: 0.96
         });
-      } else if (previous?.generationActive && (current.assistantVisibleAnswer || current.completionAction)) {
+      } else if (previous?.generationActive && (currentTurnVisible || current.completionAction)) {
         ingestStateSignal("GENERATION_INACTIVE", {
           source: "dom",
-          reason: "generation control disappeared after output",
-          confidence: 0.84
+          reason: "generation control disappeared after current-turn output",
+          confidence: 0.86
         });
       } else if (current.completionAction && current.assistantTurnCount > assistantBaselineCount) {
         ingestStateSignal("DOM_COMPLETE", {
           source: "dom",
           reason: "completion action is available on the new assistant turn",
-          confidence: 0.82
+          confidence: 0.84
         });
       }
     }
@@ -522,6 +536,16 @@
     }
   }
 
+  function rememberProtocolRequest(payload) {
+    const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
+    const path = typeof payload?.path === "string" ? payload.path : null;
+    if (!requestId) return;
+    protocolRequestPaths.set(requestId, path);
+    if (protocolRequestPaths.size > 300) {
+      protocolRequestPaths.delete(protocolRequestPaths.keys().next().value);
+    }
+  }
+
   function handleProbeMessage(event) {
     if (event.source !== window || event.origin !== location.origin || !validProbeMessage(event.data)) return;
     const {type, payload = {}} = event.data;
@@ -550,16 +574,22 @@
     }
     if (type === "state_signal") {
       const code = String(payload.code || "").toUpperCase();
+      const requestPath = payload.requestId ? protocolRequestPaths.get(payload.requestId) || null : null;
+      const canonicalConversationRequest = TurnState.isCanonicalConversationPath(requestPath);
       queueEvent("protocol_state_signal", {
         code,
         confidence: payload.confidence ?? null,
         reason: payload.reason || null,
         transport: payload.transport || null,
-        requestId: payload.requestId || null
+        requestId: payload.requestId || null,
+        requestPath,
+        canonicalConversationRequest
       });
       if (code === "PROMPT_SUBMITTED") {
-        notePromptSubmitted(payload.source || "protocol", payload.reason || "protocol request", payload.confidence || 0.9);
-      } else {
+        if (payload.source === "fetch" && canonicalConversationRequest) {
+          notePromptSubmitted("fetch", "canonical conversation request observed", payload.confidence || 0.9);
+        }
+      } else if (!(code === "GENERATION_ERROR" && payload.source === "fetch" && requestPath && !canonicalConversationRequest)) {
         ingestStateSignal(code, {
           source: payload.source || "protocol",
           reason: payload.reason,
@@ -571,6 +601,7 @@
       return;
     }
     if (["transport_request", "transport_response", "transport_complete", "transport_error", "probe_error"].includes(type)) {
+      if (type === "transport_request") rememberProtocolRequest(payload);
       queueEvent(type === "probe_error" ? "probe_error" : "protocol_transport", {phase: type, probe: payload});
     }
   }
@@ -584,7 +615,8 @@
     buffer = [];
     recent.length = 0;
     protocolFrameCount = 0;
-    assistantBaselineCount = assistantNodes().length;
+    protocolRequestPaths = new Map();
+    setAssistantBaseline();
     turnTracker = TurnState.createTracker(meta.lastTurnState || null);
     lastDomState = null;
     startObservers();
