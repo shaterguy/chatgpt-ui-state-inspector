@@ -22,11 +22,11 @@
         <button id="start" class="primary">기록 시작</button>
         <button id="stop" class="danger" disabled>기록 종료</button>
       </div>
-      <div id="live-status" class="status" role="status" aria-live="polite">대기 중</div>
+      <div id="live-status" class="status" role="status" aria-live="polite">대기 중 · 기록 시작 시 계측기 연결 확인</div>
       <div id="turn-phase" class="phase-panel" data-phase="IDLE" aria-live="polite">
         <span class="phase-label">현재 대화 상태</span>
         <strong id="phase-code">IDLE · 대기</strong>
-        <span id="phase-meta">상태 probe 연결 대기</span>
+        <span id="phase-meta">기록 시작 전</span>
       </div>
       <ol id="recent-events" class="recent" aria-label="최근 기록 이벤트"></ol>
     </section>
@@ -70,6 +70,6 @@
     </article>
   </template>
 
-  <script src="sidepanel-bootstrap.js"></script>
+  <script src="sidepanel.js"></script>
 </body>
 </html>
