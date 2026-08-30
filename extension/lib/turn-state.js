@@ -41,7 +41,7 @@
 
   function blankState() {
     return {
-      protocolVersion: "1.1.1",
+      protocolVersion: "1.1.0",
       phase: PHASES.IDLE,
       turnSequence: 0,
       turnId: null,
