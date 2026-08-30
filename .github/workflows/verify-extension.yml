@@ -3,7 +3,7 @@ name: verify-extension
 on:
   push:
     branches:
-      - v0.1.0-dev1
+      - 'v*-dev*'
   pull_request:
     branches:
       - main
@@ -36,17 +36,18 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
+          ARCHIVE="dist/chatgpt-ui-state-inspector-${GITHUB_REF_NAME}.zip"
           (
             cd extension
-            zip -q -r ../dist/chatgpt-ui-state-inspector-v0.1.0-dev1.zip .
+            zip -q -r "../${ARCHIVE}" .
           )
-          unzip -Z1 dist/chatgpt-ui-state-inspector-v0.1.0-dev1.zip | grep -Fx manifest.json
-          unzip -t dist/chatgpt-ui-state-inspector-v0.1.0-dev1.zip
+          unzip -Z1 "${ARCHIVE}" | grep -Fx manifest.json
+          unzip -t "${ARCHIVE}"
 
       - name: Upload unpacked extension artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: chatgpt-ui-state-inspector-v0.1.0-dev1-attempt-${{ github.run_attempt }}
+          name: chatgpt-ui-state-inspector-${{ github.ref_name }}-attempt-${{ github.run_attempt }}
           path: extension/
           if-no-files-found: error
           retention-days: 14
