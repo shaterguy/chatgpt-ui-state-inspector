@@ -12,9 +12,15 @@ const sessionsNode = document.querySelector("#sessions");
 const refreshButton = document.querySelector("#refresh");
 const template = document.querySelector("#session-template");
 let currentTabId = null;
+let preparationActive = false;
+let statusHoldUntil = 0;
 const CHATGPT_ORIGIN = "https://chatgpt.com";
 const CHATGPT_TAB_ERROR = "활성 탭이 https://chatgpt.com인지 확인해 주세요.";
 const EXPECTED_PROTOCOL_VERSION = "1.1.0";
+const EXPECTED_CARRIER_BUILD = "0.1.3-dev7";
+const SCRIPT_CALL_TIMEOUT_MS = 1200;
+const CARRIER_WAIT_MS = 8000;
+const CARRIER_POLL_MS = 180;
 const PHASE_LABELS = Object.freeze({
   IDLE: "대기",
   THINKING: "추론 중",
@@ -22,6 +28,20 @@ const PHASE_LABELS = Object.freeze({
   COMPLETE: "답변 완료",
   ERROR: "오류"
 });
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, ms, message) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 async function activeChatGptTab() {
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
@@ -32,35 +52,85 @@ async function activeChatGptTab() {
 
 async function probeRecorder(tabId) {
   try {
-    const response = await chrome.tabs.sendMessage(tabId, {type: "GET_RECORDING_STATUS"});
+    const response = await withTimeout(
+      chrome.tabs.sendMessage(tabId, {type: "GET_RECORDING_STATUS"}),
+      SCRIPT_CALL_TIMEOUT_MS,
+      "상태 기록기 응답 시간이 초과되었습니다."
+    );
     return response?.ok ? response : null;
   } catch {
     return null;
   }
 }
 
+async function mainWorldSnapshot(tabId) {
+  try {
+    const result = await withTimeout(
+      chrome.scripting.executeScript({
+        target: {tabId},
+        world: "MAIN",
+        func: () => ({
+          origin: location.origin,
+          carrier: globalThis.__CHATGPT_UI_STATE_INSPECTOR_STRUCTURE_CARRIER__ || null,
+          parserBuildId: (() => {
+            try {
+              return globalThis.UiStateInspectorProtocol?.summarizePayload?.({})?.buildId || null;
+            } catch {
+              return null;
+            }
+          })()
+        })
+      }),
+      SCRIPT_CALL_TIMEOUT_MS,
+      "ChatGPT 페이지 계측기 확인 시간이 초과되었습니다."
+    );
+    return result?.[0]?.result || null;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForCarrier(tabId) {
+  const deadline = Date.now() + CARRIER_WAIT_MS;
+  while (Date.now() < deadline) {
+    const state = await mainWorldSnapshot(tabId);
+    if (state?.origin === CHATGPT_ORIGIN && state.carrier === EXPECTED_CARRIER_BUILD) return true;
+    await delay(CARRIER_POLL_MS);
+  }
+  return false;
+}
+
+async function ensureCarrierReady(tabId) {
+  const current = await mainWorldSnapshot(tabId);
+  if (!current) throw new Error(CHATGPT_TAB_ERROR);
+  if (current.origin !== CHATGPT_ORIGIN) throw new Error(CHATGPT_TAB_ERROR);
+  if (current.carrier === EXPECTED_CARRIER_BUILD) return current;
+
+  setStatus("최신 Work 계측기를 적용하기 위해 ChatGPT 탭을 한 번 새로고침합니다.");
+  await withTimeout(
+    chrome.tabs.reload(tabId),
+    2000,
+    "ChatGPT 탭 새로고침 요청 시간이 초과되었습니다."
+  );
+  const ready = await waitForCarrier(tabId);
+  if (!ready) {
+    throw new Error("Work 계측기 연결 확인에 실패했습니다. ChatGPT 탭을 직접 새로고침한 뒤 기록 시작을 다시 눌러 주세요.");
+  }
+  return mainWorldSnapshot(tabId);
+}
+
 async function ensureContentScript(tabId) {
+  await ensureCarrierReady(tabId);
+
   const existing = await probeRecorder(tabId);
   if (existing?.result?.protocolVersion === EXPECTED_PROTOCOL_VERSION) return existing;
   if (existing) {
     throw new Error("이 탭에는 이전 버전 기록기가 연결되어 있습니다. ChatGPT 탭을 새로고침한 뒤 다시 시작해 주세요.");
   }
 
-  let origin = null;
-  try {
-    const result = await chrome.scripting.executeScript({
-      target: {tabId},
-      func: () => location.origin
-    });
-    origin = result?.[0]?.result || null;
-  } catch {
-    throw new Error(CHATGPT_TAB_ERROR);
-  }
-  if (origin !== CHATGPT_ORIGIN) throw new Error(CHATGPT_TAB_ERROR);
-
   await chrome.scripting.executeScript({
     target: {tabId},
-    files: ["lib/protocol.js", "page-probe.js"],
+    files: ["lib/protocol.js", "lib/protocol-structure-carrier.js", "page-probe.js"],
     world: "MAIN"
   });
   await chrome.scripting.executeScript({
@@ -68,6 +138,7 @@ async function ensureContentScript(tabId) {
     files: ["lib/core.js", "lib/turn-state.js", "content.js"],
     world: "ISOLATED"
   });
+
   const injected = await probeRecorder(tabId);
   if (!injected || injected.result?.protocolVersion !== EXPECTED_PROTOCOL_VERSION) {
     throw new Error("ChatGPT 탭에 상태 기록기를 연결하지 못했습니다. 탭을 새로고침한 뒤 다시 시도해 주세요.");
@@ -77,13 +148,13 @@ async function ensureContentScript(tabId) {
 
 async function sendToActiveTab(message) {
   const tab = await activeChatGptTab();
-  await ensureContentScript(tab.id);
   return chrome.tabs.sendMessage(tab.id, message);
 }
 
-function setStatus(message, kind = "normal") {
+function setStatus(message, kind = "normal", holdMs = 0) {
   statusNode.textContent = message;
   statusNode.dataset.kind = kind;
+  if (holdMs > 0) statusHoldUntil = Date.now() + holdMs;
 }
 
 function renderTurnState(state, probe) {
@@ -248,22 +319,37 @@ async function renderSessions() {
 }
 
 function showError(error) {
-  setStatus(error.message || String(error), "error");
+  setStatus(error.message || String(error), "error", 8000);
 }
 
 async function refreshLive() {
+  if (preparationActive) return;
   try {
     const tab = await activeChatGptTab();
-    const response = await ensureContentScript(tab.id);
-    if (!response?.ok) throw new Error(response?.error || "상태를 읽지 못했습니다.");
+    const response = await probeRecorder(tab.id);
+    if (!response?.ok) {
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      titleInput.disabled = false;
+      renderTurnState(null, null);
+      if (Date.now() >= statusHoldUntil) {
+        setStatus("대기 중 · 기록 시작을 누르면 계측기를 연결합니다.");
+        phaseMeta.textContent = "기록 시작 전";
+      }
+      recentNode.replaceChildren();
+      return;
+    }
+
     const state = response.result;
     startButton.disabled = state.active;
     stopButton.disabled = !state.active;
     titleInput.disabled = state.active;
     renderTurnState(state.turnState, state.probe);
-    setStatus(state.active
-      ? `“${state.title}” 기록 중 · #${state.seq} · ${state.turnState?.phase || "IDLE"}`
-      : "대기 중");
+    if (Date.now() >= statusHoldUntil) {
+      setStatus(state.active
+        ? `“${state.title}” 기록 중 · #${state.seq} · ${state.turnState?.phase || "IDLE"}`
+        : "대기 중 · 계측기 연결됨");
+    }
     recentNode.replaceChildren();
     for (const item of state.recent.slice().reverse()) {
       const li = document.createElement("li");
@@ -275,30 +361,35 @@ async function refreshLive() {
     stopButton.disabled = true;
     titleInput.disabled = false;
     renderTurnState(null, null);
-    setStatus(error.message || CHATGPT_TAB_ERROR, "error");
+    if (Date.now() >= statusHoldUntil) setStatus(error.message || CHATGPT_TAB_ERROR, "error");
     recentNode.replaceChildren();
   }
 }
 
 startButton.addEventListener("click", async () => {
   startButton.disabled = true;
+  preparationActive = true;
+  statusHoldUntil = 0;
   let session = null;
   try {
     const title = titleInput.value.replace(/\s+/g, " ").trim();
     if (!title) throw new Error("기록 제목을 입력해 주세요.");
     const tab = await activeChatGptTab();
+    setStatus("계측기 연결 확인 중");
     await ensureContentScript(tab.id);
+    setStatus("계측기 연결 완료 · 기록을 시작합니다.");
     const created = await chrome.runtime.sendMessage({type: "CREATE_SESSION", title, tabId: tab.id});
     if (!created?.ok) throw new Error(created?.error || "세션을 만들지 못했습니다.");
     session = created.result;
     const started = await chrome.tabs.sendMessage(tab.id, {type: "START_RECORDING", session});
     if (!started?.ok) throw new Error(started?.error || "기록을 시작하지 못했습니다.");
-    await refreshLive();
-    await renderSessions();
   } catch (error) {
     if (session?.id) await chrome.runtime.sendMessage({type: "ABORT_SESSION", sessionId: session.id}).catch(() => {});
     showError(error);
-    startButton.disabled = false;
+  } finally {
+    preparationActive = false;
+    await refreshLive();
+    await renderSessions().catch(showError);
   }
 });
 
