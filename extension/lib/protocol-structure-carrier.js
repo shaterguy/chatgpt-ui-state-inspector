@@ -2,7 +2,7 @@
   "use strict";
 
   const CARRIER_BUILD = "0.1.3-dev7";
-  const DECODER_BUILD = "0.1.6-dev10";
+  const DECODER_BUILD = "0.1.7-dev11";
   const CARRIER_ATTR = "data-ui-state-inspector-carrier";
   const PARSER_ATTR = "data-ui-state-inspector-parser";
   const DECODER_ATTR = "data-ui-state-inspector-decoder";
@@ -215,12 +215,78 @@
     }
   }
 
+  function inspectSseEncodedItem(raw) {
+    if (typeof base.summarizeSseData !== "function") return null;
+    const lines = String(raw ?? "").split(/\r?\n/);
+    let sawSse = false;
+    let dataCount = 0;
+    let currentEvent = null;
+    const topTokens = [];
+    const candidateTokens = [];
+    const keyPathTokens = [];
+    const signalTokens = [];
+
+    for (const line of lines) {
+      const text = String(line ?? "").trimEnd();
+      if (text.startsWith("event:")) {
+        sawSse = true;
+        currentEvent = text.slice(6).trim();
+        if (currentEvent) topTokens.push(`ee:${token(currentEvent, 32)}`);
+        continue;
+      }
+      if (!text.startsWith("data:")) continue;
+      sawSse = true;
+      dataCount += 1;
+      const payload = text.slice(5).trim();
+      if (!payload || payload === '"v1"') {
+        currentEvent = null;
+        continue;
+      }
+      if (payload === "[DONE]") {
+        signalTokens.push("esig:STREAM_COMPLETE");
+        currentEvent = null;
+        continue;
+      }
+      try {
+        const result = base.summarizeSseData(payload) || {};
+        const summary = result.summary || {};
+        if (summary.type && summary.type !== "unparsed_frame") {
+          const structure = structuralTokens(JSON.parse(payload));
+          candidateTokens.push(...structure.candidateTokens);
+          keyPathTokens.push(...structure.keyPathTokens);
+        }
+        for (const signal of Array.isArray(result.signals) ? result.signals : []) {
+          const code = token(signal?.code, 40);
+          if (code && code !== "null" && code !== "redacted") signalTokens.push(`esig:${code}`);
+        }
+      } catch {}
+      currentEvent = null;
+    }
+
+    if (!sawSse) return null;
+    if (dataCount) topTokens.push(`ei:sse-data:${Math.min(dataCount, 99)}`);
+    return {
+      topTokens: dedupe(["ei:codec:sse", ...topTokens, ...signalTokens], 12),
+      candidateTokens: dedupe(candidateTokens, 14),
+      keyPathTokens: dedupe(keyPathTokens, 14)
+    };
+  }
+
   function inspectEncodedItem(raw) {
-    const topTokens = [`ei:len:${lengthBucket(raw.length)}`];
+    const lengthToken = `ei:len:${lengthBucket(raw.length)}`;
+    const sse = inspectSseEncodedItem(raw);
+    if (sse) {
+      return {
+        topTokens: [lengthToken, ...sse.topTokens],
+        candidateTokens: sse.candidateTokens,
+        keyPathTokens: sse.keyPathTokens
+      };
+    }
+
     let parsed = parseJsonContainer(raw);
     if (parsed) {
       const structure = structuralTokens(parsed);
-      return {topTokens: [...topTokens, "ei:codec:json"], ...structure};
+      return {topTokens: [lengthToken, "ei:codec:json"], ...structure};
     }
 
     let candidate = raw;
@@ -230,27 +296,35 @@
         parsed = parseJsonContainer(decodedUri);
         if (parsed) {
           const structure = structuralTokens(parsed);
-          return {topTokens: [...topTokens, "ei:codec:url-json"], ...structure};
+          return {topTokens: [lengthToken, "ei:codec:url-json"], ...structure};
         }
         candidate = decodedUri;
       } catch {}
     }
 
     const bytes = decodeBase64Bytes(candidate);
-    if (!bytes) return {topTokens: [...topTokens, "ei:codec:opaque"], candidateTokens: [], keyPathTokens: []};
+    if (!bytes) return {topTokens: [lengthToken, "ei:codec:opaque"], candidateTokens: [], keyPathTokens: []};
 
     const text = decodeUtf8(bytes);
     if (text != null) {
       parsed = parseJsonContainer(text);
       if (parsed) {
         const structure = structuralTokens(parsed);
-        return {topTokens: [...topTokens, "ei:codec:b64-json"], ...structure};
+        return {topTokens: [lengthToken, "ei:codec:b64-json"], ...structure};
       }
-      return {topTokens: [...topTokens, "ei:codec:b64-text"], candidateTokens: [], keyPathTokens: []};
+      const nestedSse = inspectSseEncodedItem(text);
+      if (nestedSse) {
+        return {
+          topTokens: [lengthToken, "ei:codec:b64-sse", ...nestedSse.topTokens.filter((item) => item !== "ei:codec:sse")],
+          candidateTokens: nestedSse.candidateTokens,
+          keyPathTokens: nestedSse.keyPathTokens
+        };
+      }
+      return {topTokens: [lengthToken, "ei:codec:b64-text"], candidateTokens: [], keyPathTokens: []};
     }
 
     return {
-      topTokens: [...topTokens, `ei:codec:b64-${binaryCodec(bytes)}`],
+      topTokens: [lengthToken, `ei:codec:b64-${binaryCodec(bytes)}`],
       candidateTokens: [],
       keyPathTokens: []
     };
@@ -269,7 +343,7 @@
       keyPathTokens.push(...result.keyPathTokens);
     }
     return {
-      topTokens: dedupe(topTokens, 8),
+      topTokens: dedupe(topTokens, 14),
       candidateTokens: dedupe(candidateTokens, 14),
       keyPathTokens: dedupe(keyPathTokens, 14)
     };
@@ -297,27 +371,50 @@
         `root:${token(summary.rootKind, 14)}`,
         `trunc:${summary.structureTruncated ? "true" : "false"}`,
         ...(Array.isArray(summary.topLevelKeys) ? summary.topLevelKeys : [])
-      ], 20),
+      ], 24),
       messageKeys: dedupe([
         ...encodedInspection.candidateTokens,
         ...candidateTokens,
         ...(Array.isArray(summary.messageKeys) ? summary.messageKeys : [])
-      ], 20),
+      ], 24),
       metadataKeys: dedupe([
         ...encodedInspection.keyPathTokens,
         ...keyPathTokens,
         ...nestedTokens,
         ...(Array.isArray(summary.metadataKeys) ? summary.metadataKeys : [])
-      ], 20)
+      ], 24)
     };
   }
 
   function detectSignals(summary) {
     const signals = Array.isArray(base.detectSignals?.(summary)) ? [...base.detectSignals(summary)] : [];
+    const tokens = [
+      ...(Array.isArray(summary?.topLevelKeys) ? summary.topLevelKeys : []),
+      ...(Array.isArray(summary?.messageKeys) ? summary.messageKeys : []),
+      ...(Array.isArray(summary?.metadataKeys) ? summary.metadataKeys : [])
+    ];
+    const hasToken = (value) => tokens.includes(value);
+    const pushUnique = (signal) => {
+      if (!signals.some((item) => item?.code === signal.code)) signals.push(signal);
+    };
+
+    if (hasToken("esig:FIRST_VISIBLE_TOKEN")) {
+      pushUnique({code: "FIRST_VISIBLE_TOKEN", confidence: 1, reason: "Work encoded-item SSE first visible token"});
+    }
+    if (hasToken("esig:VISIBLE_ANSWER")) {
+      pushUnique({code: "VISIBLE_ANSWER", confidence: 0.9, reason: "Work encoded-item SSE assistant visible text"});
+    }
+    if (hasToken("esig:STREAM_COMPLETE")) {
+      pushUnique({code: "STREAM_COMPLETE", confidence: 0.99, reason: "Work encoded-item SSE stream complete"});
+    }
+    if (hasToken("esig:GENERATION_ERROR")) {
+      pushUnique({code: "GENERATION_ERROR", confidence: 0.95, reason: "Work encoded-item SSE generation error"});
+    }
+
     const workDone = (Array.isArray(summary?.messageKeys) ? summary.messageKeys : [])
       .some((item) => typeof item === "string" && item.startsWith("sc:s:type:done:"));
-    if (workDone && !signals.some((signal) => signal?.code === "STREAM_COMPLETE")) {
-      signals.push({code: "STREAM_COMPLETE", confidence: 0.99, reason: "Work websocket done event"});
+    if (workDone) {
+      pushUnique({code: "STREAM_COMPLETE", confidence: 0.99, reason: "Work websocket done event"});
     }
     return signals;
   }
