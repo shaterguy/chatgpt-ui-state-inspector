@@ -4,7 +4,7 @@
   const CARRIER_ATTR = "data-ui-state-inspector-carrier";
   const PARSER_ATTR = "data-ui-state-inspector-parser";
   const DECODER_ATTR = "data-ui-state-inspector-decoder";
-  const EXPECTED_DECODER_BUILD = "0.1.6-dev10";
+  const EXPECTED_DECODER_BUILD = "0.1.7-dev11";
 
   function snapshot() {
     const root = document.documentElement;
