@@ -100,8 +100,17 @@
     const event = String(summary?.event || "").toLowerCase();
     const marker = String(summary?.marker || "").toLowerCase();
     const status = String(summary?.status || "").toLowerCase();
-    if (type === "message_marker" && marker === "user_visible_token" && event === "first") {
-      signals.push({code: "FIRST_VISIBLE_TOKEN", confidence: 0.99, reason: "message_marker user_visible_token first"});
+    if (
+      type === "message_marker" && event === "first" &&
+      (marker === "final_channel_token" || marker === "user_visible_token")
+    ) {
+      signals.push({
+        code: "FIRST_VISIBLE_TOKEN",
+        confidence: marker === "final_channel_token" ? 1 : 0.99,
+        reason: marker === "final_channel_token"
+          ? "message_marker final_channel_token first"
+          : "message_marker user_visible_token first"
+      });
     }
     if (type === "message_stream_complete") {
       signals.push({code: "STREAM_COMPLETE", confidence: 0.99, reason: "message_stream_complete"});
@@ -139,7 +148,7 @@
         metadataKeys: [],
         byteLength
       };
-      return {summary, signals: [{code: "STREAM_COMPLETE", confidence: 0.94, reason: "SSE DONE sentinel"}]};
+      return {summary, signals: []};
     }
     try {
       const summary = summarizePayload(JSON.parse(data), byteLength);
