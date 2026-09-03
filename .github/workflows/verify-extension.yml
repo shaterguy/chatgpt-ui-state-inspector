@@ -26,10 +26,19 @@ jobs:
           find extension scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 |
             xargs -0 -n1 node --check
 
-      - name: Run unit and manifest tests
+      - name: Generate inspector icons
+        run: node scripts/generate-icons.mjs
+
+      - name: Run unit and integration contract tests
         run: node --test
 
-      - name: Validate security and package boundary
+      - name: Install browser smoke dependency and Chrome for Testing
+        run: npm install --no-save --package-lock=false puppeteer@25.9.0
+
+      - name: Run real Chrome integrated side panel smoke
+        run: xvfb-run -a node tests/sidepanel-browser-smoke.mjs
+
+      - name: Validate privacy, security and package boundary
         run: node scripts/validate-package.mjs
 
       - name: Verify loadable archive structure
@@ -42,6 +51,9 @@ jobs:
             zip -q -r "../${ARCHIVE}" .
           )
           unzip -Z1 "${ARCHIVE}" | grep -Fx manifest.json
+          unzip -Z1 "${ARCHIVE}" | grep -Fx request-snapshot-probe.js
+          unzip -Z1 "${ARCHIVE}" | grep -Fx request-calibrator.js
+          unzip -Z1 "${ARCHIVE}" | grep -Fx icons/icon-128.png
           unzip -t "${ARCHIVE}"
 
       - name: Upload unpacked extension artifact

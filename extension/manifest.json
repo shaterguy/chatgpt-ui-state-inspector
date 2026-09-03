@@ -1,10 +1,16 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT UI State Inspector",
-  "version": "0.1.8",
-  "version_name": "0.1.8-dev12-work-native-final-channel",
-  "description": "Record ChatGPT UI events, canonical turn states, and sanitized Work websocket protocol structure.",
+  "version": "0.2.0",
+  "version_name": "0.2.0-dev3-request-snapshot-plus-turn-state",
+  "description": "Capture model/reasoning request control values and record ChatGPT turn states without changing requests.",
   "minimum_chrome_version": "114",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "activeTab",
     "scripting",
@@ -13,7 +19,13 @@
     "sidePanel"
   ],
   "action": {
-    "default_title": "Open ChatGPT UI State Inspector"
+    "default_title": "Open ChatGPT UI State Inspector",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
@@ -27,6 +39,8 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "lib/request-snapshot-core.js",
+        "request-snapshot-probe.js",
         "lib/protocol.js",
         "lib/protocol-structure-carrier.js",
         "lib/work-native-state.js",
@@ -43,7 +57,8 @@
         "lib/core.js",
         "lib/turn-state.js",
         "content.js",
-        "handshake.js"
+        "handshake.js",
+        "request-snapshot-content.js"
       ],
       "run_at": "document_start",
       "world": "ISOLATED"

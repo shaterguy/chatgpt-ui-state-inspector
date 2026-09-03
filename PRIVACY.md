@@ -1,34 +1,31 @@
 # Privacy
 
-ChatGPT UI State Inspector is designed for local, developer-controlled inspection of ChatGPT UI and turn-state transitions.
+ChatGPT UI State Inspector is designed for local, developer-controlled inspection of ChatGPT request-control profiles and turn-state transitions.
 
-## Collected locally
+## Request snapshot collection
 
-- Trusted click timing, pointer location, and structural target descriptors
-- Selected ARIA and `data-*` state attributes
-- Candidate locators and limited control labels
-- DOM child-list, selected attribute, and bounded character-data change counts
-- Baseline, related, and final structural snapshots
-- Canonical `IDLE`, `THINKING`, `ANSWERING`, `COMPLETE`, and `ERROR` transitions with timestamps, confidence, and signal source
-- Sanitized transport metadata: event type, marker, status, role, content type, finish reason, boolean flags, key names, and byte length
+A request snapshot is captured only after the user explicitly arms a model/reasoning scenario and sends an actual ChatGPT conversation POST. The MAIN-world probe reads the request object immediately before delegating to the page's original transport. It does not rewrite, resend, or create an additional request.
+
+The snapshot keeps bounded, sanitized control primitives and request-shape metadata that can distinguish model/reasoning profiles, such as short enum/string values, booleans, numbers, endpoint, transport, first/follow-up shape, and key paths.
+
+## Turn-state recorder collection
+
+The continuous recorder stores trusted click timing, structural target descriptors, selected ARIA/data state attributes, bounded DOM mutation structure, canonical `IDLE`, `THINKING`, `ANSWERING`, `COMPLETE`, and `ERROR` transitions, and sanitized transport/protocol metadata.
 
 ## Deliberately excluded
 
-- Input, textarea, and contenteditable values
-- User prompts and chat message bodies
-- Request and response bodies
-- Header values, cookies, authentication tokens, and URL query or fragment values
-- Conversation-link titles in navigation
-- Full page HTML
-- Binary frame contents
-- Long free text and strings resembling email addresses, URLs, or telephone numbers
+Both collection paths exclude or discard:
 
-## Transport observation
+- User prompt and chat message bodies
+- Input, textarea, and contenteditable values from the state recorder
+- Attachments and file contents
+- Conversation, message, parent, request, user, account, and workspace identifier values
+- Header values, cookies, authentication tokens, credentials, passwords, and session secrets
+- URLs, email addresses, UUID-like values, long opaque strings, and volatile screen/time context
+- Full page HTML and binary frame contents
 
-The MAIN-world probe delegates to ChatGPT's existing `fetch` and `WebSocket` implementations. It does not initiate an additional network request. For SSE, it observes a cloned response stream; the page's original response remains untouched. Parsed message text is reduced to booleans such as `assistantVisibleText`, and the text itself is never returned to the isolated content script or stored.
+The request snapshot feature parses the conversation request only long enough to build the sanitized control-value snapshot; the raw request body is not persisted.
 
 ## Processing and retention
 
-All extension processing occurs inside the installed browser extension and ChatGPT tab. The extension contains no telemetry or external transmission endpoint. Sessions remain in `chrome.storage.local` until the user deletes the session or removes the extension. Export files are created locally only when the user clicks **파일 저장**.
-
-The public page variable `window.__CHATGPT_UI_STATE_INSPECTOR_STATE__` contains only the current normalized phase, timestamps, confidence, source, reason, and non-sensitive turn identifiers. It contains no prompt or answer text.
+All processing occurs inside the installed extension and ChatGPT tab. The extension contains no telemetry or external transmission endpoint. Captures and state-recording sessions remain in `chrome.storage.local` until the user resets/deletes them or removes the extension. Export files are created locally only when the user explicitly copies or saves results.

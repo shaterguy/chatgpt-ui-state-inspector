@@ -5,17 +5,64 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ChatGPT UI State Inspector</title>
   <link rel="stylesheet" href="sidepanel.css">
+  <link rel="stylesheet" href="request-calibrator.css">
 </head>
 <body>
   <header>
-    <div class="eyebrow">TURN STATE + EVENT RECORDER</div>
+    <div class="eyebrow">REQUEST PROFILE + TURN STATE RECORDER</div>
     <h1>ChatGPT UI State Inspector</h1>
-    <p>한 번 시작하면 대화의 THINKING·ANSWERING·COMPLETE 전이와 구조적 UI 신호를 같은 시간축에 기록합니다.</p>
+    <p>모델·추론 단계별 실제 conversation POST 제어값과 THINKING·ANSWERING·COMPLETE 상태 전이를 각각 기록합니다.</p>
   </header>
 
   <main>
+    <section class="card" aria-labelledby="request-calibrator-heading">
+      <div class="request-head">
+        <h2 id="request-calibrator-heading">API 요청 프로필 캡처</h2>
+        <span class="request-pill" id="request-tab-status">확인 중</span>
+      </div>
+      <p class="request-hint">각 모델·추론 조합에서 실제 프롬프트를 보낼 때 생성되는 conversation POST 요청을 1회 읽고, 안전한 제어 필드만 저장합니다. 요청은 변경하지 않습니다.</p>
+
+      <div class="request-grid">
+        <label>Chat 모델
+          <textarea id="chat-models" rows="2" placeholder="예: GPT-5.6 Sol, GPT-5.6 Terra"></textarea>
+        </label>
+        <label>Chat 추론 수준
+          <textarea id="chat-reasoning" rows="2" placeholder="예: Instant, Thinking"></textarea>
+        </label>
+        <label>Work 모델
+          <textarea id="work-models" rows="2" placeholder="예: Sol, Terra, Luna"></textarea>
+        </label>
+        <label>Work 추론 수준
+          <textarea id="work-reasoning" rows="2" placeholder="예: high, xhigh, max, ultra"></textarea>
+        </label>
+      </div>
+      <div class="request-actions">
+        <button id="generate-scenarios" class="primary">시나리오 생성·저장</button>
+        <button id="reset-captures" class="ghost">캡처만 초기화</button>
+      </div>
+      <div id="plan-summary" class="request-summary">모델/추론 목록을 입력해 주세요.</div>
+
+      <div class="request-head request-section-spacer">
+        <h3>최소 캡처 시나리오</h3>
+        <button id="arm-next" class="ghost">다음 미캡처 대기</button>
+      </div>
+      <p class="request-hint">표시된 모델·추론 상태를 ChatGPT UI에서 맞춘 뒤 짧은 프롬프트를 1회 전송합니다. 메뉴 클릭은 결과에 저장하지 않습니다.</p>
+      <div id="armed-status" class="request-armed">대기 중인 시나리오 없음</div>
+      <div id="scenario-list" class="request-scenario-list"></div>
+
+      <div class="request-head request-section-spacer">
+        <h3>캡처 결과</h3>
+        <div class="request-actions request-actions-compact">
+          <button id="copy-request-json" class="ghost">JSON 복사</button>
+          <button id="download-request-json" class="ghost">JSON 저장</button>
+        </div>
+      </div>
+      <textarea id="request-export-preview" class="request-export-preview" readonly placeholder="모델·추론별 API 요청 제어값과 기준 대비 changed / added / removed 차분이 표시됩니다."></textarea>
+      <div id="request-capture-status" class="request-capture-status" data-kind="info">캡처 준비 중</div>
+    </section>
+
     <section class="card" aria-labelledby="record-heading">
-      <h2 id="record-heading">연속 기록</h2>
+      <h2 id="record-heading">대화 상태 연속 기록</h2>
       <label for="session-title">기록 제목</label>
       <input id="session-title" maxlength="80" placeholder="예: 추론 상태 검증" autocomplete="off">
       <div class="button-row">
@@ -33,7 +80,7 @@
 
     <section class="card" aria-labelledby="sessions-heading">
       <div class="section-title">
-        <h2 id="sessions-heading">저장된 세션</h2>
+        <h2 id="sessions-heading">저장된 상태 기록 세션</h2>
         <button id="refresh" class="ghost">새로고침</button>
       </div>
       <div id="sessions" class="sessions"></div>
@@ -41,7 +88,7 @@
 
     <section class="notice">
       <strong>개인정보 보호</strong>
-      <p>입력값·대화 본문·요청 본문은 저장하지 않습니다. 프로토콜 이벤트의 종류·상태·키 목록과 DOM 구조 신호만 로컬 저장소에 남고 외부로 전송되지 않습니다.</p>
+      <p>API 요청 캡처는 프롬프트·메시지 본문·첨부·conversation/message/user/account ID·쿠키·토큰을 제외하고 짧은 제어값만 저장합니다. 상태 기록도 대화 본문을 저장하지 않으며 모든 결과는 로컬 저장소에만 남습니다.</p>
     </section>
   </main>
 
@@ -71,5 +118,7 @@
   </template>
 
   <script src="sidepanel.js"></script>
+  <script src="lib/request-snapshot-core.js"></script>
+  <script src="request-calibrator.js"></script>
 </body>
 </html>

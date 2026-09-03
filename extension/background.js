@@ -5,9 +5,18 @@ const META_PREFIX = "uiInspector:meta:";
 const CHUNK_PREFIX = "uiInspector:chunk:";
 let writeQueue = Promise.resolve();
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true}).catch(() => {});
-});
+async function ensureSidePanelReady() {
+  await chrome.sidePanel.setOptions({path: "sidepanel.html", enabled: true});
+  await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true});
+}
+
+function initializeExtensionUi() {
+  ensureSidePanelReady().catch(() => {});
+}
+
+chrome.runtime.onInstalled.addListener(initializeExtensionUi);
+chrome.runtime.onStartup.addListener(initializeExtensionUi);
+initializeExtensionUi();
 
 function queueWrite(task) {
   const run = writeQueue.then(task, task);

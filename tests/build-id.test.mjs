@@ -10,9 +10,9 @@ context.globalThis = context;
 vm.runInNewContext(source, context, {filename: "protocol.js"});
 const Protocol = context.module.exports;
 
-test("dev12 has a distinct Chrome version while retaining the stamped dev5 parser build", () => {
-  assert.equal(manifest.version, "0.1.8");
-  assert.match(manifest.version_name, /dev12/);
+test("dev3 advances extension identity while preserving the validated state parser build", () => {
+  assert.equal(manifest.version, "0.2.0");
+  assert.match(manifest.version_name, /0\.2\.0-dev3-request-snapshot-plus-turn-state/);
   const summary = Protocol.summarizePayload({status: "running"});
   assert.equal(summary.buildId, "0.1.1-dev5");
   assert.equal(summary.rootKind, "object");
