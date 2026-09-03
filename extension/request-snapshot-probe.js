@@ -7,7 +7,7 @@
   if (!core || globalThis[MARKER]) return;
   globalThis[MARKER] = true;
 
-  let armedScenarioId = null;
+  let captureEnabled = false;
   let sequence = 0;
 
   function emit(type, payload = {}) {
@@ -27,11 +27,9 @@
   }
 
   function inspect(url, method, body, transport) {
-    if (!armedScenarioId || !core.isConversationCandidate(url, method, body, location.origin)) return null;
+    if (!captureEnabled || !core.isConversationCandidate(url, method, body, location.origin)) return null;
     let endpoint = null;
     try { endpoint = new URL(url, location.href).pathname; } catch {}
-    const scenarioId = armedScenarioId;
-    armedScenarioId = null;
     const captureId = `capture-${Date.now()}-${++sequence}`;
     const snapshot = core.buildSnapshot(body, {
       capturedAt: new Date().toISOString(),
@@ -42,8 +40,10 @@
       projectContext: location.pathname.includes('/g/') || location.pathname.includes('/project'),
       hasUrlConversationId: Boolean(currentConversationId())
     });
-    emit('RS_CAPTURED', { captureId, scenarioId, snapshot });
-    emit('RS_ARM_STATE', { scenarioId: null });
+    const profile = core.requestProfileFromSnapshot(snapshot);
+    const profileKey = core.requestProfileKey(profile);
+    if (!profile || !profileKey) return null;
+    emit('RS_CAPTURED', { captureId, profile, profileKey, snapshot });
     return captureId;
   }
 
@@ -56,18 +56,15 @@
     if (event.source !== window || event.origin !== location.origin) return;
     const data = event.data;
     if (!data || data.channel !== CHANNEL || data.direction !== 'extension-to-bridge') return;
-    if (data.type === 'RS_ARM_CAPTURE') {
-      armedScenarioId = typeof data.scenarioId === 'string' && data.scenarioId ? data.scenarioId : null;
-      emit('RS_ARM_STATE', { scenarioId: armedScenarioId });
-    } else if (data.type === 'RS_DISARM_CAPTURE') {
-      armedScenarioId = null;
-      emit('RS_ARM_STATE', { scenarioId: null });
+    if (data.type === 'RS_SET_CAPTURE_ENABLED') {
+      captureEnabled = data.enabled === true;
+      emit('RS_CAPTURE_STATE', { enabled: captureEnabled });
     }
   });
 
   const originalFetch = window.fetch;
   function requestSnapshotFetch(input, init) {
-    if (!armedScenarioId) return Reflect.apply(originalFetch, this, arguments);
+    if (!captureEnabled) return Reflect.apply(originalFetch, this, arguments);
     const url = typeof input === 'string' || input instanceof URL ? String(input) : input?.url;
     const method = init?.method || input?.method || 'GET';
 
@@ -102,7 +99,7 @@
     return Reflect.apply(originalOpen, this, [method, url, ...rest]);
   };
   XMLHttpRequest.prototype.send = function(body) {
-    if (armedScenarioId && typeof body === 'string') {
+    if (captureEnabled && typeof body === 'string') {
       const meta = xhrMeta.get(this);
       const parsed = parseBody(body);
       if (meta && parsed) inspect(meta.url, meta.method, parsed, 'xhr');
@@ -110,5 +107,5 @@
     return Reflect.apply(originalSend, this, arguments);
   };
 
-  emit('RS_BRIDGE_READY', { captureOnly: true });
+  emit('RS_BRIDGE_READY', { continuousCapture: true });
 })();

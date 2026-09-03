@@ -10,9 +10,9 @@ context.globalThis = context;
 vm.runInNewContext(source, context, {filename: "protocol.js"});
 const Protocol = context.module.exports;
 
-test("dev3 advances extension identity while preserving the validated state parser build", () => {
+test("dev4 advances extension identity while preserving the validated state parser build", () => {
   assert.equal(manifest.version, "0.2.0");
-  assert.match(manifest.version_name, /0\.2\.0-dev3-request-snapshot-plus-turn-state/);
+  assert.match(manifest.version_name, /0\.2\.0-dev4-auto-request-profile-capture/);
   const summary = Protocol.summarizePayload({status: "running"});
   assert.equal(summary.buildId, "0.1.1-dev5");
   assert.equal(summary.rootKind, "object");

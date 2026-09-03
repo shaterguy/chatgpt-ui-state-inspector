@@ -3,6 +3,23 @@
 const INDEX_KEY = "uiInspector:sessionIndex";
 const META_PREFIX = "uiInspector:meta:";
 const CHUNK_PREFIX = "uiInspector:chunk:";
+const REQUEST_CAPTURE_ENABLED_KEY = "chatGptRequestProfileCaptureEnabledV2";
+const REQUEST_PROFILES_KEY = "chatGptRequestProfilesV2";
+const LEGACY_REQUEST_CAPTURES_KEY = "chatGptRequestSnapshotCapturesV1";
+const REQUEST_BLOCKED_KEYS = new Set([
+  "id", "conversation_id", "parent_message_id", "message_id", "current_node",
+  "request_id", "client_request_id", "user_id", "account_id", "workspace_id",
+  "prompt", "input", "text", "content", "parts", "messages", "message",
+  "attachments", "attachment", "files", "file", "image", "audio",
+  "authorization", "cookie", "set-cookie", "client_contextual_info"
+]);
+const REQUEST_BLOCKED_PATTERN = /(token|secret|credential|password|cookie|authorization|session)/i;
+const REQUEST_VOLATILE_PATTERN = /^(time_since_loaded|timestamp|request_time|screen_|viewport_|window_|pixel_ratio|timezone_)/i;
+const REQUEST_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f-]{20,}$/i;
+const REQUEST_OPAQUE_PATTERN = /^[A-Za-z0-9_\-./+=]{64,}$/;
+const REQUEST_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MODEL_KEYS = ["model", "model_slug", "selected_model"];
+const REASONING_KEYS = ["thinking_effort", "reasoning_effort", "reasoning_level", "thinking_level", "reasoning", "effort"];
 let writeQueue = Promise.resolve();
 
 async function ensureSidePanelReady() {
@@ -43,6 +60,227 @@ function isChatGptContent(sender) {
   } catch {
     return false;
   }
+}
+
+function requestPathBlocked(path) {
+  return path.some((segment) => {
+    const lower = String(segment).toLowerCase();
+    return REQUEST_BLOCKED_KEYS.has(lower)
+      || /_ids?$/.test(lower)
+      || REQUEST_BLOCKED_PATTERN.test(lower)
+      || REQUEST_VOLATILE_PATTERN.test(lower);
+  });
+}
+
+function safeRequestPrimitive(value) {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return true;
+  if (typeof value !== "string" || value.length === 0 || value.length > 160) return false;
+  if (/^https?:\/\//i.test(value) || REQUEST_EMAIL_PATTERN.test(value)) return false;
+  if (REQUEST_UUID_PATTERN.test(value) || REQUEST_OPAQUE_PATTERN.test(value)) return false;
+  return true;
+}
+
+function safeRequestValue(value) {
+  if (Array.isArray(value)) return value.length <= 16 && value.every(safeRequestPrimitive);
+  return safeRequestPrimitive(value);
+}
+
+function safeShortString(value, max = 160) {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
+}
+
+function safeIso(value) {
+  return typeof value === "string" && value.length <= 64 && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
+function sanitizeRequestSnapshot(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const serialized = JSON.stringify(input);
+  if (serialized.length > 300000 || !Array.isArray(input.leaves) || input.leaves.length > 512) return null;
+
+  const leaves = [];
+  for (const leaf of input.leaves) {
+    if (!leaf || !Array.isArray(leaf.path) || leaf.path.length < 1 || leaf.path.length > 9) continue;
+    if (!leaf.path.every((part) => typeof part === "string" && part.length > 0 && part.length <= 80)) continue;
+    if (requestPathBlocked(leaf.path) || !safeRequestValue(leaf.value)) continue;
+    leaves.push({path: leaf.path.slice(), value: Array.isArray(leaf.value) ? leaf.value.slice() : leaf.value});
+  }
+
+  const endpoint = typeof input.endpoint === "string" && input.endpoint.startsWith("/backend-api/") && input.endpoint.length <= 200
+    ? input.endpoint.split("?")[0]
+    : null;
+  const transport = ["fetch", "fetch-request", "xhr"].includes(input.transport) ? input.transport : null;
+  const page = input.page && typeof input.page === "object" ? input.page : {};
+  const shape = input.requestShape && typeof input.requestShape === "object" ? input.requestShape : {};
+  const action = safeRequestPrimitive(shape.action) ? shape.action : null;
+  const messageCount = Number.isInteger(shape.messageCount) && shape.messageCount >= 0 && shape.messageCount <= 1000
+    ? shape.messageCount
+    : null;
+
+  return {
+    schemaVersion: 1,
+    capturedAt: safeIso(input.capturedAt) || new Date().toISOString(),
+    endpoint,
+    method: "POST",
+    transport,
+    page: {
+      routeKind: safeShortString(page.routeKind, 60),
+      projectContext: page.projectContext === true,
+      hasUrlConversationId: page.hasUrlConversationId === true
+    },
+    requestShape: {
+      hasConversationId: shape.hasConversationId === true,
+      hasParentMessageId: shape.hasParentMessageId === true,
+      messageCount,
+      action,
+      turnClass: shape.turnClass === "followup" ? "followup" : "first"
+    },
+    leaves
+  };
+}
+
+function findControlLeaf(snapshot, candidates, stringOnly = false) {
+  for (const candidate of candidates) {
+    for (const topLevelOnly of [true, false]) {
+      const leaf = snapshot.leaves.find((item) => {
+        if (topLevelOnly && item.path.length !== 1) return false;
+        if (String(item.path[item.path.length - 1]).toLowerCase() !== candidate) return false;
+        if (stringOnly) return typeof item.value === "string" && safeRequestPrimitive(item.value);
+        return !Array.isArray(item.value) && safeRequestPrimitive(item.value);
+      });
+      if (leaf) return {value: leaf.value, path: leaf.path.slice()};
+    }
+  }
+  return null;
+}
+
+function requestProfileFromSnapshot(snapshot) {
+  const model = findControlLeaf(snapshot, MODEL_KEYS, true);
+  if (!model) return null;
+  const reasoning = findControlLeaf(snapshot, REASONING_KEYS, false);
+  return {
+    model: model.value,
+    reasoning: reasoning ? reasoning.value : null,
+    modelPath: model.path,
+    reasoningPath: reasoning ? reasoning.path : null
+  };
+}
+
+function requestProfileKey(profile) {
+  if (!profile || typeof profile.model !== "string" || !profile.model) return null;
+  return JSON.stringify([profile.model, profile.reasoning ?? null]);
+}
+
+function migrateLegacyRequestProfiles(profiles, legacyCaptures) {
+  const next = Array.isArray(profiles) ? profiles.slice() : [];
+  const keys = new Set(next.map((item) => item?.profileKey).filter(Boolean));
+  let added = 0;
+  for (const legacy of Array.isArray(legacyCaptures) ? legacyCaptures : []) {
+    const snapshot = sanitizeRequestSnapshot(legacy?.snapshot);
+    if (!snapshot) continue;
+    const profile = requestProfileFromSnapshot(snapshot);
+    const profileKey = requestProfileKey(profile);
+    if (!profileKey || keys.has(profileKey)) continue;
+    keys.add(profileKey);
+    next.push({
+      schemaVersion: 2,
+      profileKey,
+      profile,
+      captureId: safeShortString(legacy?.captureId, 120) || `legacy-${next.length + 1}`,
+      firstCapturedAt: snapshot.capturedAt,
+      savedAt: safeIso(legacy?.savedAt) || snapshot.capturedAt,
+      migratedFrom: LEGACY_REQUEST_CAPTURES_KEY,
+      snapshot
+    });
+    added += 1;
+  }
+  return {profiles: next, added};
+}
+
+async function getRequestProfileState(sender) {
+  if (!isExtensionPage(sender)) throw new Error("Extension page required.");
+  return queueWrite(async () => {
+    const stored = await chrome.storage.local.get([
+      REQUEST_CAPTURE_ENABLED_KEY,
+      REQUEST_PROFILES_KEY,
+      LEGACY_REQUEST_CAPTURES_KEY
+    ]);
+    const legacyCaptures = Array.isArray(stored[LEGACY_REQUEST_CAPTURES_KEY]) ? stored[LEGACY_REQUEST_CAPTURES_KEY] : [];
+    const migrated = migrateLegacyRequestProfiles(stored[REQUEST_PROFILES_KEY], legacyCaptures);
+    if (migrated.added) await chrome.storage.local.set({[REQUEST_PROFILES_KEY]: migrated.profiles});
+    return {
+      captureEnabled: stored[REQUEST_CAPTURE_ENABLED_KEY] === true,
+      profiles: migrated.profiles,
+      legacyCaptures,
+      migratedCount: migrated.added
+    };
+  });
+}
+
+async function setRequestProfileCaptureEnabled(message, sender) {
+  if (!isExtensionPage(sender)) throw new Error("Extension page required.");
+  const enabled = message.enabled === true;
+  return queueWrite(async () => {
+    await chrome.storage.local.set({[REQUEST_CAPTURE_ENABLED_KEY]: enabled});
+    return {captureEnabled: enabled};
+  });
+}
+
+async function resetRequestProfiles(message, sender) {
+  if (!isExtensionPage(sender)) throw new Error("Extension page required.");
+  return queueWrite(async () => {
+    await chrome.storage.local.set({
+      [REQUEST_PROFILES_KEY]: [],
+      [LEGACY_REQUEST_CAPTURES_KEY]: []
+    });
+    return {reset: true};
+  });
+}
+
+async function saveRequestProfileCapture(message, sender) {
+  if (!isChatGptContent(sender)) throw new Error("ChatGPT content script required.");
+  return queueWrite(async () => {
+    const stored = await chrome.storage.local.get([
+      REQUEST_CAPTURE_ENABLED_KEY,
+      REQUEST_PROFILES_KEY,
+      LEGACY_REQUEST_CAPTURES_KEY
+    ]);
+    const legacyCaptures = Array.isArray(stored[LEGACY_REQUEST_CAPTURES_KEY]) ? stored[LEGACY_REQUEST_CAPTURES_KEY] : [];
+    const migrated = migrateLegacyRequestProfiles(stored[REQUEST_PROFILES_KEY], legacyCaptures);
+    let profiles = migrated.profiles;
+    if (migrated.added) await chrome.storage.local.set({[REQUEST_PROFILES_KEY]: profiles});
+    if (stored[REQUEST_CAPTURE_ENABLED_KEY] !== true) {
+      return {stored: false, disabled: true, profileCount: profiles.length};
+    }
+
+    const snapshot = sanitizeRequestSnapshot(message.snapshot);
+    if (!snapshot) throw new Error("Invalid request profile snapshot.");
+    const profile = requestProfileFromSnapshot(snapshot);
+    const profileKey = requestProfileKey(profile);
+    if (!profileKey) throw new Error("Request model profile was not found.");
+    if (safeShortString(message.profileKey, 240) && message.profileKey !== profileKey) {
+      throw new Error("Request profile key mismatch.");
+    }
+
+    if (profiles.some((item) => item?.profileKey === profileKey)) {
+      return {stored: false, duplicate: true, profileKey, profileCount: profiles.length};
+    }
+
+    const now = new Date().toISOString();
+    const record = {
+      schemaVersion: 2,
+      profileKey,
+      profile,
+      captureId: safeShortString(message.captureId, 120) || `capture-${crypto.randomUUID()}`,
+      firstCapturedAt: snapshot.capturedAt,
+      savedAt: now,
+      migratedFrom: null,
+      snapshot
+    };
+    profiles = [...profiles, record];
+    await chrome.storage.local.set({[REQUEST_PROFILES_KEY]: profiles});
+    return {stored: true, duplicate: false, profileKey, profileCount: profiles.length};
+  });
 }
 
 async function getIndex() {
@@ -203,6 +441,10 @@ async function activeForTab(message, sender) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handlers = {
+    GET_REQUEST_PROFILE_STATE: () => getRequestProfileState(sender),
+    SET_REQUEST_PROFILE_CAPTURE_ENABLED: () => setRequestProfileCaptureEnabled(message, sender),
+    RESET_REQUEST_PROFILES: () => resetRequestProfiles(message, sender),
+    SAVE_REQUEST_PROFILE_CAPTURE: () => saveRequestProfileCapture(message, sender),
     CREATE_SESSION: () => createSession(message, sender),
     APPEND_EVENTS: () => appendEvents(message, sender),
     COMPLETE_SESSION: () => completeSession(message, sender),

@@ -39,6 +39,62 @@ test('conversation candidate ignores menu traffic and accepts actual conversatio
   assert.equal(core.isConversationCandidate('https://example.com/backend-api/f/conversation', 'POST', { action: 'next', messages: [] }), false);
 });
 
+test('derives an exact model/reasoning profile key from the sanitized snapshot', () => {
+  const snapshot = core.buildSnapshot({
+    action: 'next',
+    model: 'gpt-test-model',
+    thinking_effort: 'high',
+    messages: []
+  });
+  const profile = core.requestProfileFromSnapshot(snapshot);
+  assert.deepEqual(profile, {
+    model: 'gpt-test-model',
+    reasoning: 'high',
+    modelPath: ['model'],
+    reasoningPath: ['thinking_effort']
+  });
+  assert.equal(core.requestProfileKey(profile), '["gpt-test-model","high"]');
+});
+
+test('accepts a model with no explicit reasoning value as the default/null combination', () => {
+  const snapshot = core.buildSnapshot({action: 'next', model: 'gpt-test-model', messages: []});
+  const profile = core.requestProfileFromSnapshot(snapshot);
+  assert.equal(profile.model, 'gpt-test-model');
+  assert.equal(profile.reasoning, null);
+  assert.equal(profile.reasoningPath, null);
+  assert.equal(core.requestProfileKey(profile), '["gpt-test-model",null]');
+});
+
+test('prefers top-level model/reasoning controls and falls back to safe nested aliases', () => {
+  const topLevel = core.buildSnapshot({
+    action: 'next',
+    model: 'top-model',
+    thinking_effort: 'high',
+    client: {model: 'nested-model', thinking_effort: 'low'},
+    messages: []
+  });
+  assert.equal(core.requestProfileFromSnapshot(topLevel).model, 'top-model');
+  assert.equal(core.requestProfileFromSnapshot(topLevel).reasoning, 'high');
+
+  const nested = core.buildSnapshot({
+    action: 'next',
+    controls: {selected_model: 'nested-model', reasoning_effort: 'max'},
+    messages: []
+  });
+  assert.deepEqual(core.requestProfileFromSnapshot(nested), {
+    model: 'nested-model',
+    reasoning: 'max',
+    modelPath: ['controls', 'selected_model'],
+    reasoningPath: ['controls', 'reasoning_effort']
+  });
+});
+
+test('does not produce a profile key when no safe model control exists', () => {
+  const snapshot = core.buildSnapshot({action: 'next', messages: []});
+  assert.equal(core.requestProfileFromSnapshot(snapshot), null);
+  assert.equal(core.requestProfileKey(null), null);
+});
+
 test('diff reports changed, added and removed safe leaves', () => {
   const a = { leaves: [{ path: ['model'], value: 'a' }, { path: ['old'], value: true }] };
   const b = { leaves: [{ path: ['model'], value: 'b' }, { path: ['new'], value: 1 }] };
@@ -47,20 +103,4 @@ test('diff reports changed, added and removed safe leaves', () => {
   assert.deepEqual(diff.added, [{ path: ['new'], value: 1 }]);
   assert.deepEqual(diff.removed, [{ path: ['old'], value: true }]);
   assert.equal(diff.differenceCount, 3);
-});
-
-test('minimal plan includes Chat and Work model/reasoning axes plus Work follow-up captures', () => {
-  const plan = core.buildScenarioPlan({
-    chatModels: ['C0', 'C1'],
-    chatReasoning: ['R0', 'R1', 'R2'],
-    workModels: ['W0', 'W1', 'W2'],
-    workReasoning: ['E0', 'E1']
-  });
-  assert.equal(plan.error, null);
-  assert.equal(plan.requiredCount, 12);
-  assert.equal(plan.optionalCount, 1);
-  assert.equal(plan.scenarios.filter((s) => s.group === 'work-followup' && s.required).length, 4);
-  assert.ok(plan.scenarios.some((s) => s.id === 'work-followup-model-1' && s.phase === 'followup'));
-  assert.ok(plan.scenarios.some((s) => s.id === 'work-followup-reasoning-1' && s.phase === 'followup'));
-  assert.equal(plan.scenarios.find((s) => s.id === 'work-followup-cross-check').required, false);
 });

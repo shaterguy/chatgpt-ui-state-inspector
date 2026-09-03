@@ -41,7 +41,10 @@ try {
       headerVisible: visible(document.querySelector("header")),
       calibratorVisible: visible(document.querySelector("#request-calibrator-heading")),
       stateRecorderVisible: visible(document.querySelector("#record-heading")),
-      modelInputs: ["chat-models", "chat-reasoning", "work-models", "work-reasoning"].every((id) => visible(document.getElementById(id))),
+      autoCaptureControls: ["start-request-capture", "stop-request-capture", "request-profile-summary", "request-profile-list"]
+        .every((id) => Boolean(document.getElementById(id))),
+      oldScenarioControls: ["chat-models", "chat-reasoning", "work-models", "work-reasoning", "generate-scenarios", "arm-next", "scenario-list"]
+        .some((id) => Boolean(document.getElementById(id))),
       cardCount: cards.length,
       visibleCards: cards.filter(visible).length,
       bodyWidth: document.body.getBoundingClientRect().width,
@@ -54,14 +57,46 @@ try {
   });
 
   if (direct.heading !== "ChatGPT UI State Inspector") throw new Error(`Unexpected heading: ${direct.heading}`);
-  if (!direct.headerVisible || !direct.calibratorVisible || !direct.stateRecorderVisible || !direct.modelInputs || direct.visibleCards < 3) {
+  if (!direct.headerVisible || !direct.calibratorVisible || !direct.stateRecorderVisible || !direct.autoCaptureControls || direct.visibleCards < 3) {
     throw new Error(`Integrated side panel render failed: ${JSON.stringify(direct)}`);
   }
+  if (direct.oldScenarioControls) throw new Error(`Old scenario controls are still present: ${JSON.stringify(direct)}`);
   if (direct.hasSwitchControls) throw new Error(`Unexpected Chat/Work switching UI: ${JSON.stringify(direct)}`);
   if (direct.options?.path !== "sidepanel.html" || direct.options?.enabled === false) throw new Error(`Side panel options are not active: ${JSON.stringify(direct.options)}`);
   if (direct.behavior?.openPanelOnActionClick !== true) throw new Error(`Toolbar behavior is not armed: ${JSON.stringify(direct.behavior)}`);
 
-  let interceptedConversationBody = null;
+  const legacySnapshot = {
+    schemaVersion: 1,
+    capturedAt: new Date().toISOString(),
+    endpoint: "/backend-api/f/conversation",
+    method: "POST",
+    transport: "fetch",
+    page: {routeKind: "conversation", projectContext: false, hasUrlConversationId: true},
+    requestShape: {hasConversationId: true, hasParentMessageId: true, messageCount: 1, action: "next", turnClass: "followup"},
+    leaves: [
+      {path: ["action"], value: "next"},
+      {path: ["model"], value: "legacy-model"},
+      {path: ["thinking_effort"], value: "legacy-high"}
+    ]
+  };
+  await directPage.evaluate(async (snapshot) => {
+    await chrome.storage.local.set({
+      chatGptRequestSnapshotCapturesV1: [{scenarioId: "legacy-dev3", captureId: "legacy-1", savedAt: snapshot.capturedAt, snapshot}],
+      chatGptRequestProfilesV2: []
+    });
+    const response = await chrome.runtime.sendMessage({type: "GET_REQUEST_PROFILE_STATE"});
+    if (!response?.ok || response.result?.profiles?.length !== 1 || response.result?.legacyCaptures?.length !== 1) {
+      throw new Error(`Legacy migration failed: ${JSON.stringify(response)}`);
+    }
+  }, legacySnapshot);
+
+  await directPage.click("#start-request-capture");
+  await directPage.waitForFunction(async () => {
+    const stored = await chrome.storage.local.get("chatGptRequestProfileCaptureEnabledV2");
+    return stored.chatGptRequestProfileCaptureEnabledV2 === true;
+  });
+
+  const interceptedConversationBodies = [];
   const chatPage = await browser.newPage();
   await chatPage.setRequestInterception(true);
   chatPage.on("request", async (request) => {
@@ -71,7 +106,7 @@ try {
       return;
     }
     if (url.includes("/backend-api/f/conversation")) {
-      interceptedConversationBody = request.postData() || null;
+      interceptedConversationBodies.push(request.postData() || null);
       await request.respond({status: 200, contentType: "application/json", body: "{\"ok\":true}"});
       return;
     }
@@ -86,53 +121,103 @@ try {
   });
   if (!chatTabId) throw new Error("Could not resolve synthetic ChatGPT tab id");
 
-  const armResponse = await directPage.evaluate(async (tabId) => {
-    return chrome.tabs.sendMessage(tabId, {
-      source: "chatgpt-request-snapshot-panel",
-      type: "RS_ARM_SCENARIO",
-      scenario: {id: "smoke-profile", order: 1, mode: "chat", phase: "first", model: "smoke-model", reasoning: "smoke-high"}
-    });
-  }, chatTabId);
-  if (!armResponse?.ok) throw new Error(`Could not arm request snapshot: ${JSON.stringify(armResponse)}`);
+  await directPage.waitForFunction(async (tabId) => {
+    return chrome.tabs.sendMessage(tabId, {source: "chatgpt-request-snapshot-panel", type: "RS_GET_STATE"})
+      .then((response) => response?.bridgeReady === true && response?.captureEnabled === true)
+      .catch(() => false);
+  }, {timeout: 5000}, chatTabId);
 
-  await chatPage.evaluate(async () => {
-    await fetch("/backend-api/f/conversation", {
-      method: "POST",
-      headers: {"content-type": "application/json"},
-      body: JSON.stringify({
-        action: "next",
-        model: "smoke-model",
-        thinking_effort: "smoke-high",
-        conversation_origin: "smoke-origin",
-        conversation_id: "smoke-private-conversation-id",
-        messages: [{content: {parts: ["SMOKE_PRIVATE_PROMPT"]}}]
-      })
-    });
-  });
+  async function sendSynthetic(model, effort, marker) {
+    await chatPage.evaluate(async ({model, effort, marker}) => {
+      await fetch("/backend-api/f/conversation", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({
+          action: "next",
+          model,
+          thinking_effort: effort,
+          conversation_origin: "smoke-origin",
+          conversation_id: `smoke-private-conversation-${marker}`,
+          messages: [{content: {parts: [`SMOKE_PRIVATE_PROMPT_${marker}`]}}]
+        })
+      });
+    }, {model, effort, marker});
+  }
 
+  await sendSynthetic("smoke-model", "smoke-high", "A1");
   await directPage.waitForFunction(async () => {
-    const stored = await chrome.storage.local.get("chatGptRequestSnapshotCapturesV1");
-    return Array.isArray(stored.chatGptRequestSnapshotCapturesV1)
-      && stored.chatGptRequestSnapshotCapturesV1.some((item) => item.scenarioId === "smoke-profile");
+    const stored = await chrome.storage.local.get("chatGptRequestProfilesV2");
+    return Array.isArray(stored.chatGptRequestProfilesV2) && stored.chatGptRequestProfilesV2.length === 2;
   }, {timeout: 5000});
 
-  const capture = await directPage.evaluate(async () => {
-    const stored = await chrome.storage.local.get("chatGptRequestSnapshotCapturesV1");
-    return stored.chatGptRequestSnapshotCapturesV1.find((item) => item.scenarioId === "smoke-profile");
+  await sendSynthetic("smoke-model", "smoke-high", "A2");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const duplicateCount = await directPage.evaluate(async () => {
+    const stored = await chrome.storage.local.get("chatGptRequestProfilesV2");
+    return stored.chatGptRequestProfilesV2?.length || 0;
   });
-  const leaves = new Map(capture.snapshot.leaves.map((leaf) => [JSON.stringify(leaf.path), leaf.value]));
-  if (leaves.get('["model"]') !== "smoke-model") throw new Error(`Model control not captured: ${JSON.stringify(capture)}`);
-  if (leaves.get('["thinking_effort"]') !== "smoke-high") throw new Error(`Reasoning control not captured: ${JSON.stringify(capture)}`);
-  if ([...leaves.keys()].some((key) => key.includes("messages") || key.includes("conversation_id"))) {
-    throw new Error(`Private payload escaped sanitizer: ${JSON.stringify(capture)}`);
+  if (duplicateCount !== 2) throw new Error(`Duplicate profile was not skipped: ${duplicateCount}`);
+
+  await sendSynthetic("smoke-model", "smoke-max", "B1");
+  await directPage.waitForFunction(async () => {
+    const stored = await chrome.storage.local.get("chatGptRequestProfilesV2");
+    return Array.isArray(stored.chatGptRequestProfilesV2) && stored.chatGptRequestProfilesV2.length === 3;
+  }, {timeout: 5000});
+
+  const profileState = await directPage.evaluate(async () => {
+    const stored = await chrome.storage.local.get(["chatGptRequestProfilesV2", "chatGptRequestSnapshotCapturesV1"]);
+    return {
+      profiles: stored.chatGptRequestProfilesV2 || [],
+      legacy: stored.chatGptRequestSnapshotCapturesV1 || []
+    };
+  });
+  const profileKeys = profileState.profiles.map((item) => item.profileKey).sort();
+  for (const expected of [
+    '["legacy-model","legacy-high"]',
+    '["smoke-model","smoke-high"]',
+    '["smoke-model","smoke-max"]'
+  ]) {
+    if (!profileKeys.includes(expected)) throw new Error(`Missing profile ${expected}: ${JSON.stringify(profileState)}`);
   }
-  const transmitted = JSON.parse(interceptedConversationBody || "null");
-  if (transmitted?.model !== "smoke-model" || transmitted?.thinking_effort !== "smoke-high") {
-    throw new Error(`Outgoing controls were modified: ${interceptedConversationBody}`);
+  if (profileState.legacy.length !== 1) throw new Error(`Legacy dev3 source was modified: ${JSON.stringify(profileState.legacy)}`);
+  const storedJson = JSON.stringify(profileState.profiles);
+  if (storedJson.includes("SMOKE_PRIVATE_PROMPT") || storedJson.includes("smoke-private-conversation")) {
+    throw new Error(`Private payload escaped sanitizer: ${storedJson}`);
   }
-  if (transmitted?.conversation_id !== "smoke-private-conversation-id" || transmitted?.messages?.[0]?.content?.parts?.[0] !== "SMOKE_PRIVATE_PROMPT") {
-    throw new Error(`Outgoing request body was modified: ${interceptedConversationBody}`);
+
+  await directPage.click("#stop-request-capture");
+  await directPage.waitForFunction(async () => {
+    const stored = await chrome.storage.local.get("chatGptRequestProfileCaptureEnabledV2");
+    return stored.chatGptRequestProfileCaptureEnabledV2 === false;
+  });
+  await chatPage.bringToFront();
+  await sendSynthetic("smoke-other-model", "smoke-high", "C1");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const stoppedCount = await directPage.evaluate(async () => {
+    const stored = await chrome.storage.local.get("chatGptRequestProfilesV2");
+    return stored.chatGptRequestProfilesV2?.length || 0;
+  });
+  if (stoppedCount !== 3) throw new Error(`Capture continued after stop: ${stoppedCount}`);
+
+  if (interceptedConversationBodies.length !== 4) {
+    throw new Error(`Unexpected outgoing request count: ${interceptedConversationBodies.length}`);
   }
+  const transmitted = interceptedConversationBodies.map((body) => JSON.parse(body || "null"));
+  const expectedBodies = [
+    ["smoke-model", "smoke-high", "A1"],
+    ["smoke-model", "smoke-high", "A2"],
+    ["smoke-model", "smoke-max", "B1"],
+    ["smoke-other-model", "smoke-high", "C1"]
+  ];
+  transmitted.forEach((body, index) => {
+    const [model, effort, marker] = expectedBodies[index];
+    if (body?.model !== model || body?.thinking_effort !== effort) {
+      throw new Error(`Outgoing controls were modified: ${JSON.stringify(body)}`);
+    }
+    if (body?.conversation_id !== `smoke-private-conversation-${marker}` || body?.messages?.[0]?.content?.parts?.[0] !== `SMOKE_PRIVATE_PROMPT_${marker}`) {
+      throw new Error(`Outgoing request body was modified: ${JSON.stringify(body)}`);
+    }
+  });
 
   await directPage.evaluate(() => chrome.sidePanel.setOptions({path: "sidepanel.html", enabled: false}));
   const stale = await directPage.evaluate(() => chrome.sidePanel.getOptions({}));
@@ -160,11 +245,13 @@ try {
   console.log("SIDEPANEL_BROWSER_SMOKE_PASS", JSON.stringify({
     extensionId,
     direct,
-    requestSnapshot: {
-      model: leaves.get('["model"]'),
-      thinkingEffort: leaves.get('["thinking_effort"]'),
+    requestProfiles: {
+      legacyMigrated: true,
+      uniqueCount: 3,
+      duplicateSkipped: true,
+      stoppedCaptureIgnored: true,
       privateFieldsStored: false,
-      outgoingBodyPreserved: true
+      outgoingBodiesPreserved: true
     },
     sidePanelContext: actual
   }));

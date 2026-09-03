@@ -10,6 +10,7 @@ const sidepanelSource = fs.readFileSync(new URL("../extension/sidepanel.js", imp
 const calibratorSource = fs.readFileSync(new URL("../extension/request-calibrator.js", import.meta.url), "utf8");
 const snapshotProbeSource = fs.readFileSync(new URL("../extension/request-snapshot-probe.js", import.meta.url), "utf8");
 const snapshotContentSource = fs.readFileSync(new URL("../extension/request-snapshot-content.js", import.meta.url), "utf8");
+const backgroundSource = fs.readFileSync(new URL("../extension/background.js", import.meta.url), "utf8");
 const handshakeSource = fs.readFileSync(new URL("../extension/handshake.js", import.meta.url), "utf8");
 const carrierSource = fs.readFileSync(new URL("../extension/lib/protocol-structure-carrier.js", import.meta.url), "utf8");
 const nativeSource = fs.readFileSync(new URL("../extension/lib/work-native-state.js", import.meta.url), "utf8");
@@ -39,7 +40,7 @@ test("keeps the existing permission set and declares packaged inspector icons", 
   assert.deepEqual(manifest.action.default_icon, manifest.icons);
 });
 
-test("loads request snapshot capture before the existing turn-state recorder without request switching", () => {
+test("loads persistent automatic request profile capture before the existing turn-state recorder without request switching", () => {
   assert.deepEqual(manifest.content_scripts[0].js, [
     "lib/request-snapshot-core.js",
     "request-snapshot-probe.js",
@@ -56,13 +57,17 @@ test("loads request snapshot capture before the existing turn-state recorder wit
     "request-snapshot-content.js"
   ]);
   assert.match(snapshotProbeSource, /RS_CAPTURED/);
+  assert.match(snapshotProbeSource, /RS_SET_CAPTURE_ENABLED/);
   assert.match(snapshotProbeSource, /buildSnapshot/);
   assert.match(snapshotProbeSource, /Reflect\.apply\(originalFetch/);
-  assert.match(snapshotContentSource, /RS_ARM_SCENARIO/);
-  assert.match(calibratorSource, /chatModels/);
-  assert.match(calibratorSource, /chatReasoning/);
-  assert.match(calibratorSource, /workModels/);
-  assert.match(calibratorSource, /workReasoning/);
+  assert.match(snapshotContentSource, /chatGptRequestProfileCaptureEnabledV2/);
+  assert.match(snapshotContentSource, /SAVE_REQUEST_PROFILE_CAPTURE/);
+  assert.match(calibratorSource, /start-request-capture/);
+  assert.match(calibratorSource, /SET_REQUEST_PROFILE_CAPTURE_ENABLED/);
+  assert.match(backgroundSource, /chatGptRequestProfilesV2/);
+  assert.match(backgroundSource, /migrateLegacyRequestProfiles/);
+  assert.doesNotMatch(snapshotProbeSource, /RS_ARM_SCENARIO|armedScenarioId/);
+  assert.doesNotMatch(calibratorSource, /chatModels|workModels|buildScenarioPlan|armScenario/);
   assert.doesNotMatch(snapshotProbeSource, /SET_CHAT_WORK_SWITCH|prepareSwitchArgs/);
   assert.equal(fs.existsSync(path.join(extensionRoot, "switch-controller.js")), false);
   assert.equal(fs.existsSync(path.join(extensionRoot, "sidepanel-switch.js")), false);
@@ -80,13 +85,13 @@ test("retains the validated turn-state and Work protocol classifier chain", () =
   assert.match(nativeSource, /VISIBLE_ANSWER/);
 });
 
-test("side panel exposes both requested functions", () => {
+test("side panel exposes automatic request capture and the existing turn-state recorder", () => {
   assert.equal(manifest.side_panel.default_path, "sidepanel.html");
   assert.match(sidepanelHtml, /id="request-calibrator-heading"/);
-  assert.match(sidepanelHtml, /id="chat-models"/);
-  assert.match(sidepanelHtml, /id="chat-reasoning"/);
-  assert.match(sidepanelHtml, /id="work-models"/);
-  assert.match(sidepanelHtml, /id="work-reasoning"/);
+  assert.match(sidepanelHtml, /id="start-request-capture"/);
+  assert.match(sidepanelHtml, /id="stop-request-capture"/);
+  assert.match(sidepanelHtml, /id="request-profile-list"/);
+  assert.doesNotMatch(sidepanelHtml, /id="chat-models"|id="chat-reasoning"|id="work-models"|id="work-reasoning"|id="generate-scenarios"|id="arm-next"/);
   assert.match(sidepanelHtml, /id="record-heading"/);
   assert.match(sidepanelHtml, /<script src="sidepanel\.js"><\/script>/);
   assert.match(sidepanelHtml, /<script src="request-calibrator\.js"><\/script>/);

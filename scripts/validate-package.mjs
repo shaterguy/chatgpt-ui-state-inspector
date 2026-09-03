@@ -15,7 +15,7 @@ const expectedIcons = {
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.version, "0.2.0");
-assert.match(manifest.version_name, /0\.2\.0-dev3-request-snapshot-plus-turn-state/);
+assert.match(manifest.version_name, /0\.2\.0-dev4-auto-request-profile-capture/);
 assert.equal(manifest.content_scripts.length, 2);
 assert.deepEqual([...new Set(manifest.content_scripts.flatMap((item) => item.matches))], ["https://chatgpt.com/*"]);
 assert.equal(manifest.host_permissions, undefined);
@@ -59,6 +59,10 @@ const snapshotProbePath = path.join(extensionRoot, "request-snapshot-probe.js");
 const pageProbe = fs.readFileSync(pageProbePath, "utf8");
 const snapshotProbe = fs.readFileSync(snapshotProbePath, "utf8");
 const snapshotCore = fs.readFileSync(path.join(extensionRoot, "lib/request-snapshot-core.js"), "utf8");
+const snapshotContent = fs.readFileSync(path.join(extensionRoot, "request-snapshot-content.js"), "utf8");
+const calibrator = fs.readFileSync(path.join(extensionRoot, "request-calibrator.js"), "utf8");
+const background = fs.readFileSync(path.join(extensionRoot, "background.js"), "utf8");
+const sidepanelHtml = fs.readFileSync(path.join(extensionRoot, "sidepanel.html"), "utf8");
 const nonProbeJavascript = javascriptFiles
   .filter((file) => file !== pageProbePath && file !== snapshotProbePath)
   .map((file) => fs.readFileSync(file, "utf8"))
@@ -75,23 +79,45 @@ for (const pattern of [/\bchrome\s*\./, /\bXMLHttpRequest\b/, /\bEventSource\b/,
   assert.equal(pattern.test(pageProbe), false, `Forbidden turn-state page-probe capability: ${pattern}`);
 }
 for (const pattern of [/\bchrome\s*\./, /\bWebSocket\b/, /\bEventSource\b/, /\bsendBeacon\b/, /\blocalStorage\b/, /\bsessionStorage\b/, /\bindexedDB\b/, /document\.cookie/, /request\.headers/, /authorization/i]) {
-  assert.equal(pattern.test(snapshotProbe), false, `Forbidden request-snapshot probe capability: ${pattern}`);
+  assert.equal(pattern.test(snapshotProbe), false, `Forbidden request-profile probe capability: ${pattern}`);
 }
 assert.match(pageProbe, /Reflect\.apply\(nativeFetch/);
 assert.match(pageProbe, /new NativeWebSocket/);
 assert.match(pageProbe, /response\.clone\(\)/);
 assert.match(snapshotProbe, /Reflect\.apply\(originalFetch/);
 assert.match(snapshotProbe, /Reflect\.apply\(originalSend/);
-assert.match(snapshotProbe, /buildSnapshot/);
-assert.match(snapshotProbe, /armedScenarioId = null/);
-assert.doesNotMatch(snapshotProbe, /SET_CHAT_WORK_SWITCH|prepareSwitchArgs|thinking_effort\s*=|body\.model\s*=/);
+assert.match(snapshotProbe, /captureEnabled/);
+assert.match(snapshotProbe, /RS_SET_CAPTURE_ENABLED/);
+assert.match(snapshotProbe, /RS_CAPTURED/);
+assert.match(snapshotProbe, /requestProfileFromSnapshot/);
+assert.doesNotMatch(snapshotProbe, /armedScenarioId|RS_ARM_SCENARIO|SET_CHAT_WORK_SWITCH|prepareSwitchArgs|thinking_effort\s*=|body\.model\s*=/);
 assert.match(snapshotCore, /BLOCKED_KEYS/);
 assert.match(snapshotCore, /collectLeaves/);
-assert.match(snapshotCore, /buildScenarioPlan/);
+assert.match(snapshotCore, /requestProfileFromSnapshot/);
+assert.match(snapshotCore, /requestProfileKey/);
 assert.match(snapshotCore, /diffSnapshots/);
+assert.doesNotMatch(snapshotCore, /buildScenarioPlan|work-followup-cross-check/);
+assert.match(snapshotContent, /chatGptRequestProfileCaptureEnabledV2/);
+assert.match(snapshotContent, /SAVE_REQUEST_PROFILE_CAPTURE/);
+assert.match(snapshotContent, /chrome\.storage\.onChanged/);
+assert.doesNotMatch(snapshotContent, /slice\(-250\)|MAX_PER_SCENARIO|RS_ARM_SCENARIO|RS_DISARM/);
+assert.match(background, /chatGptRequestProfilesV2/);
+assert.match(background, /chatGptRequestSnapshotCapturesV1/);
+assert.match(background, /migrateLegacyRequestProfiles/);
+assert.match(background, /sanitizeRequestSnapshot/);
+assert.match(background, /queueWrite/);
+assert.match(background, /duplicate: true/);
+assert.doesNotMatch(background, /slice\(-250\)|MAX_PER_SCENARIO/);
+assert.match(calibrator, /chatgpt-request-profile-capture-v2/);
+assert.match(calibrator, /automaticTruncation: false/);
+assert.match(calibrator, /explicitClearOnly: true/);
+assert.doesNotMatch(calibrator, /buildScenarioPlan|RS_ARM_SCENARIO|armScenario|nextMissingScenario/);
+assert.match(sidepanelHtml, /id="start-request-capture"/);
+assert.match(sidepanelHtml, /id="stop-request-capture"/);
+assert.doesNotMatch(sidepanelHtml, /id="generate-scenarios"|id="arm-next"|id="chat-models"|id="work-models"/);
 
 const protocolSource = fs.readFileSync(path.join(extensionRoot, "lib/protocol.js"), "utf8");
 assert.doesNotMatch(protocolSource, /parts\s*:\s*parts/);
 assert.doesNotMatch(protocolSource, /raw(?:Data|Payload|Body)\s*:/);
 
-console.log(`Validated ${packagedFiles.length} extension files with passive request snapshots, turn-state recording, no request switching, packaged icons, and fixed chatgpt.com scope.`);
+console.log(`Validated ${packagedFiles.length} extension files with persistent automatic request-profile capture, exact model/reasoning dedupe, turn-state recording, no request switching, packaged icons, and fixed chatgpt.com scope.`);
