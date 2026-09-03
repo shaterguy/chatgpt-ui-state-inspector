@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChatGPT UI State Inspector",
   "version": "0.2.0",
-  "version_name": "0.2.0-dev1-integrated-chat-work-switcher",
+  "version_name": "0.2.0-dev2-sidepanel-self-heal",
   "description": "Inspect ChatGPT turn states and optionally switch Chat/Work request profiles inside the same conversation.",
   "minimum_chrome_version": "114",
   "icons": {
