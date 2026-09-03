@@ -1,6 +1,6 @@
 # ChatGPT UI State Inspector
 
-`v0.2.0-dev4` combines two passive inspection functions in one Chrome side panel. It does not include Chat↔Work request switching.
+`v0.2.0-dev5` combines two passive inspection functions in one Chrome side panel. It does not include Chat↔Work request switching.
 
 ## 1. Automatic model / reasoning API request profiles
 
@@ -13,10 +13,14 @@ The **API 요청 프로필 캡처** section no longer uses a scenario plan.
 - Capture stays enabled across side-panel close, ChatGPT reload, and browser restart until it is explicitly stopped.
 - Stored profiles are not automatically capped, truncated, or aged out. They remain until the user explicitly clears them or removes the extension.
 - Existing `v0.2.0-dev3` request snapshots in the same extension storage are preserved and unique model/reasoning combinations are migrated non-destructively into the v2 profile store.
-- Copy / Save JSON exports the full accumulated v2 profile set together with preserved legacy dev3 captures.
+- Known GPT-5.6 combinations are shown with the current user-facing picker label and the raw internal combination together, for example `매우 높음` plus `gpt-5-6-thinking · 추론 max`.
+- Unknown combinations fall back to a humanized model name plus the original reasoning value rather than inventing a picker label.
+- Copy / Save JSON exports `displayName` and `internalCombination` alongside the full accumulated v2 profile set and preserved legacy dev3 captures.
 - The request is never rewritten or resent by this feature.
 
 Excluded from snapshots include prompt/message text, attachments, conversation/message/user/account/workspace identifiers, auth/cookies/tokens, URLs/emails, UUID-like values, and volatile screen/time context.
+
+The request-profile card UI uses the shared light/dark theme variables rather than fixed dark surfaces, so text and backgrounds remain readable in both color schemes.
 
 ## 2. Turn-state and UI event recorder
 

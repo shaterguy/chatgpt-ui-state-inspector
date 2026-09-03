@@ -1,6 +1,7 @@
 (() => {
   'use strict';
 
+  const core = globalThis.ChatGptRequestSnapshotCore;
   const ENABLED_KEY = 'chatGptRequestProfileCaptureEnabledV2';
   const PROFILES_KEY = 'chatGptRequestProfilesV2';
   const LEGACY_CAPTURES_KEY = 'chatGptRequestSnapshotCapturesV1';
@@ -18,7 +19,7 @@
     tabStatus: document.getElementById('request-tab-status')
   };
 
-  if (Object.values(els).some((node) => !node)) return;
+  if (!core || Object.values(els).some((node) => !node)) return;
 
   let captureEnabled = false;
   let profiles = [];
@@ -36,14 +37,18 @@
     return response.result;
   }
 
-  function reasoningLabel(value) {
-    return value === null || value === undefined ? '(요청값 없음/기본)' : String(value);
+  function decoratedProfiles() {
+    return profiles.map((record) => ({
+      ...record,
+      displayName: core.userVisibleProfileName(record?.profile),
+      internalCombination: core.internalProfileLabel(record?.profile)
+    }));
   }
 
   function exportObject() {
     return {
       schema: 'chatgpt-request-profile-capture-v2',
-      extensionVersion: '0.2.0-dev4',
+      extensionVersion: '0.2.0-dev5',
       exportedAt: new Date().toISOString(),
       captureEnabled,
       profileCount: profiles.length,
@@ -64,7 +69,7 @@
         authOrCookieStored: false,
         externalTransmission: false
       },
-      profiles,
+      profiles: decoratedProfiles(),
       legacyScenarioCaptures: legacyCaptures
     };
   }
@@ -83,16 +88,21 @@
       els.profileList.appendChild(empty);
     } else {
       profiles.forEach((record, index) => {
+        const displayName = core.userVisibleProfileName(record?.profile);
+        const internalCombination = core.internalProfileLabel(record?.profile);
         const card = document.createElement('div');
         card.className = 'request-scenario';
         const title = document.createElement('div');
         title.className = 'request-scenario-title';
-        title.textContent = `${index + 1}. ${record?.profile?.model || '(model 없음)'} · 추론 ${reasoningLabel(record?.profile?.reasoning)}`;
-        const meta = document.createElement('div');
-        meta.className = 'request-scenario-meta';
+        title.textContent = `${index + 1}. ${displayName}`;
+        const internal = document.createElement('div');
+        internal.className = 'request-scenario-meta';
+        internal.textContent = `내부 조합: ${internalCombination}`;
+        const detail = document.createElement('div');
+        detail.className = 'request-scenario-instruction';
         const capturedAt = record?.firstCapturedAt || record?.savedAt || '';
-        meta.textContent = `${record?.migratedFrom ? 'dev3 이관' : '자동 캡처'}${capturedAt ? ` · ${capturedAt}` : ''}`;
-        card.append(title, meta);
+        detail.textContent = `${record?.migratedFrom ? 'dev3 이관' : '자동 캡처'}${capturedAt ? ` · ${capturedAt}` : ''}`;
+        card.append(title, internal, detail);
         els.profileList.appendChild(card);
       });
     }

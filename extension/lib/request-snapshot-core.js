@@ -15,6 +15,22 @@
   const LIKELY_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const MODEL_KEYS = ['model', 'model_slug', 'selected_model'];
   const REASONING_KEYS = ['thinking_effort', 'reasoning_effort', 'reasoning_level', 'thinking_level', 'reasoning', 'effort'];
+  const GPT56_VISIBLE_LABELS = new Map([
+    ['gpt-5-6\u0000', '즉시'],
+    ['gpt-5-6-thinking\u0000standard', '중간'],
+    ['gpt-5-6-thinking\u0000medium', '중간'],
+    ['gpt-5-6-thinking\u0000extended', '높음'],
+    ['gpt-5-6-thinking\u0000high', '높음'],
+    ['gpt-5-6-thinking\u0000max', '매우 높음'],
+    ['gpt-5-6-thinking\u0000heavy', '매우 높음'],
+    ['gpt-5-6-thinking\u0000xhigh', '매우 높음'],
+    ['gpt-5-6-thinking\u0000extra_high', '매우 높음'],
+    ['gpt-5-6-thinking\u0000extra-high', '매우 높음'],
+    ['gpt-5-6-pro\u0000standard', 'Pro 표준'],
+    ['gpt-5-6-pro\u0000medium', 'Pro 표준'],
+    ['gpt-5-6-pro\u0000extended', 'Pro 확장'],
+    ['gpt-5-6-pro\u0000high', 'Pro 확장']
+  ]);
 
   function shouldSkipKey(key) {
     const lower = String(key).toLowerCase();
@@ -124,6 +140,44 @@
     return JSON.stringify([profile.model, profile.reasoning ?? null]);
   }
 
+  function normalizedControl(value) {
+    return value === null || value === undefined ? '' : String(value).trim().toLowerCase();
+  }
+
+  function humanizeModelSlug(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '(model 없음)';
+    const match = /^gpt-(\d+)-(\d+)(?:-(.+))?$/i.exec(raw);
+    if (!match) return raw;
+    const suffix = match[3]
+      ? ` ${match[3].split('-').filter(Boolean).map((part) => {
+          const lower = part.toLowerCase();
+          if (lower === 'pro') return 'Pro';
+          if (lower === 'gpt') return 'GPT';
+          return `${part.charAt(0).toUpperCase()}${part.slice(1)}`;
+        }).join(' ')}`
+      : '';
+    return `GPT-${match[1]}.${match[2]}${suffix}`;
+  }
+
+  function userVisibleProfileName(profile) {
+    const model = normalizedControl(profile?.model);
+    const reasoning = normalizedControl(profile?.reasoning);
+    const exact = GPT56_VISIBLE_LABELS.get(`${model}\u0000${reasoning}`);
+    if (exact) return exact;
+    if (model === 'gpt-5-6-pro' && !reasoning) return 'Pro';
+    const friendlyModel = humanizeModelSlug(profile?.model);
+    return reasoning ? `${friendlyModel} · ${String(profile.reasoning)}` : friendlyModel;
+  }
+
+  function internalProfileLabel(profile) {
+    const model = typeof profile?.model === 'string' && profile.model ? profile.model : '(model 없음)';
+    const reasoning = profile?.reasoning === null || profile?.reasoning === undefined || profile?.reasoning === ''
+      ? '기본'
+      : String(profile.reasoning);
+    return `${model} · 추론 ${reasoning}`;
+  }
+
   const pathKey = (path) => JSON.stringify(path);
   const valueKey = (value) => JSON.stringify(value);
 
@@ -162,6 +216,9 @@
     buildSnapshot,
     requestProfileFromSnapshot,
     requestProfileKey,
+    humanizeModelSlug,
+    userVisibleProfileName,
+    internalProfileLabel,
     diffSnapshots
   };
 })();

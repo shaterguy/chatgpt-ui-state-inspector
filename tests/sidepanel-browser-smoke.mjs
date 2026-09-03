@@ -26,6 +26,7 @@ try {
   const sidePanelUrl = `chrome-extension://${extensionId}/sidepanel.html`;
   await directPage.goto(sidePanelUrl, {waitUntil: "load"});
   await directPage.waitForSelector("h1");
+  await directPage.waitForSelector("#request-profile-list .request-scenario");
 
   const direct = await directPage.evaluate(async () => {
     const visible = (node) => {
@@ -34,7 +35,21 @@ try {
       const style = getComputedStyle(node);
       return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
     };
+    const parseRgb = (value) => (value.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+    const linear = (channel) => {
+      const c = channel / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = (rgb) => 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
+    const contrastRatio = (node) => {
+      const style = getComputedStyle(node);
+      const fg = luminance(parseRgb(style.color));
+      const bg = luminance(parseRgb(style.backgroundColor));
+      return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+    };
     const cards = [...document.querySelectorAll(".card")];
+    const emptyProfileCard = document.querySelector("#request-profile-list .request-scenario");
+    const summary = document.getElementById("request-profile-summary");
     return {
       title: document.title,
       heading: document.querySelector("h1")?.textContent || "",
@@ -45,6 +60,8 @@ try {
         .every((id) => Boolean(document.getElementById(id))),
       oldScenarioControls: ["chat-models", "chat-reasoning", "work-models", "work-reasoning", "generate-scenarios", "arm-next", "scenario-list"]
         .some((id) => Boolean(document.getElementById(id))),
+      requestProfileContrast: contrastRatio(emptyProfileCard),
+      requestSummaryContrast: contrastRatio(summary),
       cardCount: cards.length,
       visibleCards: cards.filter(visible).length,
       bodyWidth: document.body.getBoundingClientRect().width,
@@ -59,6 +76,9 @@ try {
   if (direct.heading !== "ChatGPT UI State Inspector") throw new Error(`Unexpected heading: ${direct.heading}`);
   if (!direct.headerVisible || !direct.calibratorVisible || !direct.stateRecorderVisible || !direct.autoCaptureControls || direct.visibleCards < 3) {
     throw new Error(`Integrated side panel render failed: ${JSON.stringify(direct)}`);
+  }
+  if (direct.requestProfileContrast < 4.5 || direct.requestSummaryContrast < 4.5) {
+    throw new Error(`Request-profile light-theme contrast regression: ${JSON.stringify(direct)}`);
   }
   if (direct.oldScenarioControls) throw new Error(`Old scenario controls are still present: ${JSON.stringify(direct)}`);
   if (direct.hasSwitchControls) throw new Error(`Unexpected Chat/Work switching UI: ${JSON.stringify(direct)}`);
@@ -152,26 +172,41 @@ try {
   });
   if (duplicateCount !== 2) throw new Error(`Duplicate profile was not skipped: ${duplicateCount}`);
 
-  await sendSynthetic("smoke-model", "smoke-max", "B1");
+  await sendSynthetic("gpt-5-6-thinking", "max", "B1");
   await directPage.waitForFunction(async () => {
     const stored = await chrome.storage.local.get("chatGptRequestProfilesV2");
     return Array.isArray(stored.chatGptRequestProfilesV2) && stored.chatGptRequestProfilesV2.length === 3;
   }, {timeout: 5000});
+  await directPage.waitForFunction(() => {
+    const text = document.getElementById("request-profile-list")?.textContent || "";
+    return text.includes("매우 높음") && text.includes("gpt-5-6-thinking · 추론 max");
+  }, {timeout: 5000});
 
   const profileState = await directPage.evaluate(async () => {
     const stored = await chrome.storage.local.get(["chatGptRequestProfilesV2", "chatGptRequestSnapshotCapturesV1"]);
+    const exportJson = JSON.parse(document.getElementById("request-export-preview")?.value || "{}");
+    const visibleText = document.getElementById("request-profile-list")?.textContent || "";
     return {
       profiles: stored.chatGptRequestProfilesV2 || [],
-      legacy: stored.chatGptRequestSnapshotCapturesV1 || []
+      legacy: stored.chatGptRequestSnapshotCapturesV1 || [],
+      exportedProfiles: exportJson.profiles || [],
+      visibleText
     };
   });
   const profileKeys = profileState.profiles.map((item) => item.profileKey).sort();
   for (const expected of [
     '["legacy-model","legacy-high"]',
     '["smoke-model","smoke-high"]',
-    '["smoke-model","smoke-max"]'
+    '["gpt-5-6-thinking","max"]'
   ]) {
     if (!profileKeys.includes(expected)) throw new Error(`Missing profile ${expected}: ${JSON.stringify(profileState)}`);
+  }
+  const readable = profileState.exportedProfiles.find((item) => item?.profileKey === '["gpt-5-6-thinking","max"]');
+  if (readable?.displayName !== "매우 높음" || readable?.internalCombination !== "gpt-5-6-thinking · 추론 max") {
+    throw new Error(`Readable profile export missing: ${JSON.stringify(readable)}`);
+  }
+  if (!profileState.visibleText.includes("매우 높음") || !profileState.visibleText.includes("gpt-5-6-thinking · 추론 max")) {
+    throw new Error(`Readable profile UI missing: ${profileState.visibleText}`);
   }
   if (profileState.legacy.length !== 1) throw new Error(`Legacy dev3 source was modified: ${JSON.stringify(profileState.legacy)}`);
   const storedJson = JSON.stringify(profileState.profiles);
@@ -201,7 +236,7 @@ try {
   const expectedBodies = [
     ["smoke-model", "smoke-high", "A1"],
     ["smoke-model", "smoke-high", "A2"],
-    ["smoke-model", "smoke-max", "B1"],
+    ["gpt-5-6-thinking", "max", "B1"],
     ["smoke-other-model", "smoke-high", "C1"]
   ];
   transmitted.forEach((body, index) => {
@@ -246,7 +281,9 @@ try {
       duplicateSkipped: true,
       stoppedCaptureIgnored: true,
       privateFieldsStored: false,
-      outgoingBodiesPreserved: true
+      outgoingBodiesPreserved: true,
+      readableLabel: "매우 높음",
+      internalCombination: "gpt-5-6-thinking · 추론 max"
     },
     sidePanelContext: actual
   }));

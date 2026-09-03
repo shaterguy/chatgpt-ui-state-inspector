@@ -15,7 +15,7 @@ const expectedIcons = {
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.version, "0.2.0");
-assert.match(manifest.version_name, /0\.2\.0-dev4-auto-request-profile-capture/);
+assert.match(manifest.version_name, /0\.2\.0-dev5-readable-profile-labels/);
 assert.equal(manifest.content_scripts.length, 2);
 assert.deepEqual([...new Set(manifest.content_scripts.flatMap((item) => item.matches))], ["https://chatgpt.com/*"]);
 assert.equal(manifest.host_permissions, undefined);
@@ -61,6 +61,7 @@ const snapshotProbe = fs.readFileSync(snapshotProbePath, "utf8");
 const snapshotCore = fs.readFileSync(path.join(extensionRoot, "lib/request-snapshot-core.js"), "utf8");
 const snapshotContent = fs.readFileSync(path.join(extensionRoot, "request-snapshot-content.js"), "utf8");
 const calibrator = fs.readFileSync(path.join(extensionRoot, "request-calibrator.js"), "utf8");
+const calibratorCss = fs.readFileSync(path.join(extensionRoot, "request-calibrator.css"), "utf8");
 const background = fs.readFileSync(path.join(extensionRoot, "background.js"), "utf8");
 const sidepanelHtml = fs.readFileSync(path.join(extensionRoot, "sidepanel.html"), "utf8");
 const nonProbeJavascript = javascriptFiles
@@ -95,6 +96,9 @@ assert.match(snapshotCore, /BLOCKED_KEYS/);
 assert.match(snapshotCore, /collectLeaves/);
 assert.match(snapshotCore, /requestProfileFromSnapshot/);
 assert.match(snapshotCore, /requestProfileKey/);
+assert.match(snapshotCore, /userVisibleProfileName/);
+assert.match(snapshotCore, /internalProfileLabel/);
+assert.match(snapshotCore, /매우 높음/);
 assert.match(snapshotCore, /diffSnapshots/);
 assert.doesNotMatch(snapshotCore, /buildScenarioPlan|work-followup-cross-check/);
 assert.match(snapshotContent, /chatGptRequestProfileCaptureEnabledV2/);
@@ -109,9 +113,15 @@ assert.match(background, /queueWrite/);
 assert.match(background, /duplicate: true/);
 assert.doesNotMatch(background, /slice\(-250\)|MAX_PER_SCENARIO/);
 assert.match(calibrator, /chatgpt-request-profile-capture-v2/);
+assert.match(calibrator, /0\.2\.0-dev5/);
+assert.match(calibrator, /displayName: core\.userVisibleProfileName/);
+assert.match(calibrator, /internalCombination: core\.internalProfileLabel/);
 assert.match(calibrator, /automaticTruncation: false/);
 assert.match(calibrator, /explicitClearOnly: true/);
 assert.doesNotMatch(calibrator, /buildScenarioPlan|RS_ARM_SCENARIO|armScenario|nextMissingScenario/);
+assert.match(calibratorCss, /background:var\(--card\)/);
+assert.match(calibratorCss, /color:var\(--text\)/);
+assert.doesNotMatch(calibratorCss, /background:#0d1719|background:#091113/);
 assert.match(sidepanelHtml, /id="start-request-capture"/);
 assert.match(sidepanelHtml, /id="stop-request-capture"/);
 assert.doesNotMatch(sidepanelHtml, /id="generate-scenarios"|id="arm-next"|id="chat-models"|id="work-models"/);
@@ -120,4 +130,4 @@ const protocolSource = fs.readFileSync(path.join(extensionRoot, "lib/protocol.js
 assert.doesNotMatch(protocolSource, /parts\s*:\s*parts/);
 assert.doesNotMatch(protocolSource, /raw(?:Data|Payload|Body)\s*:/);
 
-console.log(`Validated ${packagedFiles.length} extension files with persistent automatic request-profile capture, exact model/reasoning dedupe, turn-state recording, no request switching, packaged icons, and fixed chatgpt.com scope.`);
+console.log(`Validated ${packagedFiles.length} extension files with readable model/reasoning labels, theme-safe request-profile UI, persistent exact dedupe, turn-state recording, no request switching, packaged icons, and fixed chatgpt.com scope.`);

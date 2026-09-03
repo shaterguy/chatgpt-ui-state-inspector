@@ -89,6 +89,26 @@ test('prefers top-level model/reasoning controls and falls back to safe nested a
   });
 });
 
+test('maps known GPT-5.6 request combinations to the current visible picker labels', () => {
+  assert.equal(core.userVisibleProfileName({model: 'gpt-5-6', reasoning: null}), '즉시');
+  assert.equal(core.userVisibleProfileName({model: 'gpt-5-6-thinking', reasoning: 'standard'}), '중간');
+  assert.equal(core.userVisibleProfileName({model: 'gpt-5-6-thinking', reasoning: 'extended'}), '높음');
+  assert.equal(core.userVisibleProfileName({model: 'gpt-5-6-thinking', reasoning: 'max'}), '매우 높음');
+  assert.equal(core.userVisibleProfileName({model: 'gpt-5-6-pro', reasoning: 'standard'}), 'Pro 표준');
+  assert.equal(core.userVisibleProfileName({model: 'gpt-5-6-pro', reasoning: 'extended'}), 'Pro 확장');
+});
+
+test('keeps the internal model/reasoning combination visible alongside the friendly label', () => {
+  const profile = {model: 'gpt-5-6-thinking', reasoning: 'max'};
+  assert.equal(core.userVisibleProfileName(profile), '매우 높음');
+  assert.equal(core.internalProfileLabel(profile), 'gpt-5-6-thinking · 추론 max');
+});
+
+test('falls back without inventing a picker label for unknown combinations', () => {
+  assert.equal(core.userVisibleProfileName({model: 'gpt-5-6-sol', reasoning: 'ultra'}), 'GPT-5.6 Sol · ultra');
+  assert.equal(core.internalProfileLabel({model: 'gpt-5-6-sol', reasoning: 'ultra'}), 'gpt-5-6-sol · 추론 ultra');
+});
+
 test('does not produce a profile key when no safe model control exists', () => {
   const snapshot = core.buildSnapshot({action: 'next', messages: []});
   assert.equal(core.requestProfileFromSnapshot(snapshot), null);
