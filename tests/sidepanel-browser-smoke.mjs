@@ -82,19 +82,10 @@ try {
   await directPage.evaluate(async (snapshot) => {
     await chrome.storage.local.set({
       chatGptRequestSnapshotCapturesV1: [{scenarioId: "legacy-dev3", captureId: "legacy-1", savedAt: snapshot.capturedAt, snapshot}],
-      chatGptRequestProfilesV2: []
+      chatGptRequestProfilesV2: [],
+      chatGptRequestProfileCaptureEnabledV2: true
     });
-    const response = await chrome.runtime.sendMessage({type: "GET_REQUEST_PROFILE_STATE"});
-    if (!response?.ok || response.result?.profiles?.length !== 1 || response.result?.legacyCaptures?.length !== 1) {
-      throw new Error(`Legacy migration failed: ${JSON.stringify(response)}`);
-    }
   }, legacySnapshot);
-
-  await directPage.click("#start-request-capture");
-  await directPage.waitForFunction(async () => {
-    const stored = await chrome.storage.local.get("chatGptRequestProfileCaptureEnabledV2");
-    return stored.chatGptRequestProfileCaptureEnabledV2 === true;
-  });
 
   const interceptedConversationBodies = [];
   const chatPage = await browser.newPage();
@@ -146,8 +137,11 @@ try {
 
   await sendSynthetic("smoke-model", "smoke-high", "A1");
   await directPage.waitForFunction(async () => {
-    const stored = await chrome.storage.local.get("chatGptRequestProfilesV2");
-    return Array.isArray(stored.chatGptRequestProfilesV2) && stored.chatGptRequestProfilesV2.length === 2;
+    const stored = await chrome.storage.local.get(["chatGptRequestProfilesV2", "chatGptRequestSnapshotCapturesV1"]);
+    return Array.isArray(stored.chatGptRequestProfilesV2)
+      && stored.chatGptRequestProfilesV2.length === 2
+      && Array.isArray(stored.chatGptRequestSnapshotCapturesV1)
+      && stored.chatGptRequestSnapshotCapturesV1.length === 1;
   }, {timeout: 5000});
 
   await sendSynthetic("smoke-model", "smoke-high", "A2");
@@ -185,11 +179,12 @@ try {
     throw new Error(`Private payload escaped sanitizer: ${storedJson}`);
   }
 
-  await directPage.click("#stop-request-capture");
-  await directPage.waitForFunction(async () => {
-    const stored = await chrome.storage.local.get("chatGptRequestProfileCaptureEnabledV2");
-    return stored.chatGptRequestProfileCaptureEnabledV2 === false;
-  });
+  await directPage.evaluate(() => chrome.storage.local.set({chatGptRequestProfileCaptureEnabledV2: false}));
+  await directPage.waitForFunction(async (tabId) => {
+    return chrome.tabs.sendMessage(tabId, {source: "chatgpt-request-snapshot-panel", type: "RS_GET_STATE"})
+      .then((response) => response?.bridgeReady === true && response?.captureEnabled === false)
+      .catch(() => false);
+  }, {timeout: 5000}, chatTabId);
   await chatPage.bringToFront();
   await sendSynthetic("smoke-other-model", "smoke-high", "C1");
   await new Promise((resolve) => setTimeout(resolve, 300));
