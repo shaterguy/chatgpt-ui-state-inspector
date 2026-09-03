@@ -48,12 +48,19 @@ async function applyToolbarIcon() {
   if (Object.keys(imageData).length) await chrome.action.setIcon({imageData});
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true}).catch(() => {});
+async function ensureSidePanelReady() {
+  await chrome.sidePanel.setOptions({path: "sidepanel.html", enabled: true});
+  await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true});
+}
+
+function initializeExtensionUi() {
+  ensureSidePanelReady().catch(() => {});
   applyToolbarIcon().catch(() => {});
-});
-chrome.runtime.onStartup.addListener(() => applyToolbarIcon().catch(() => {}));
-applyToolbarIcon().catch(() => {});
+}
+
+chrome.runtime.onInstalled.addListener(initializeExtensionUi);
+chrome.runtime.onStartup.addListener(initializeExtensionUi);
+initializeExtensionUi();
 
 function queueWrite(task) {
   const run = writeQueue.then(task, task);
