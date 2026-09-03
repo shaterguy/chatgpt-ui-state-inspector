@@ -15,7 +15,7 @@ const expectedIcons = {
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.version, "0.2.0");
-assert.match(manifest.version_name, /0\.2\.0-dev1/);
+assert.match(manifest.version_name, /0\.2\.0-dev2/);
 assert.equal(manifest.content_scripts.length, 2);
 assert.deepEqual(
   [...new Set(manifest.content_scripts.flatMap((item) => item.matches))],
