@@ -25,6 +25,7 @@
   let profiles = [];
   let legacyCaptures = [];
   let refreshing = false;
+  let refreshQueued = false;
 
   function setStatus(text, kind = 'info') {
     els.status.textContent = text;
@@ -110,22 +111,31 @@
   }
 
   async function refreshState({quiet = false} = {}) {
-    if (refreshing) return;
+    if (refreshing) {
+      refreshQueued = true;
+      return;
+    }
     refreshing = true;
+    let announce = !quiet;
     try {
-      const state = await callBackground('GET_REQUEST_PROFILE_STATE');
-      captureEnabled = state?.captureEnabled === true;
-      profiles = Array.isArray(state?.profiles) ? state.profiles : [];
-      legacyCaptures = Array.isArray(state?.legacyCaptures) ? state.legacyCaptures : [];
-      render();
-      if (!quiet) {
-        setStatus(
-          captureEnabled
-            ? '자동 캡처가 활성화되어 있습니다. 평소처럼 대화를 보내면 새로운 모델×추론 조합만 계속 저장합니다.'
-            : '캡처 중지 상태입니다. 시작 버튼을 누르면 시나리오 설정 없이 자동 수집합니다.',
-          captureEnabled ? 'ok' : 'info'
-        );
-      }
+      do {
+        refreshQueued = false;
+        const state = await callBackground('GET_REQUEST_PROFILE_STATE');
+        captureEnabled = state?.captureEnabled === true;
+        profiles = Array.isArray(state?.profiles) ? state.profiles : [];
+        legacyCaptures = Array.isArray(state?.legacyCaptures) ? state.legacyCaptures : [];
+        render();
+        if (announce) {
+          setStatus(
+            captureEnabled
+              ? '자동 캡처가 활성화되어 있습니다. 평소처럼 대화를 보내면 새로운 모델×추론 조합만 계속 저장합니다.'
+              : '캡처 중지 상태입니다. 시작 버튼을 누르면 시나리오 설정 없이 자동 수집합니다.',
+            captureEnabled ? 'ok' : 'info'
+          );
+          announce = false;
+        }
+        await Promise.resolve();
+      } while (refreshQueued);
     } finally {
       refreshing = false;
     }
