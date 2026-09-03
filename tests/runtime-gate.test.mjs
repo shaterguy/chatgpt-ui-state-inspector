@@ -10,7 +10,7 @@ const manifest = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json"
 
 test("integrated sidepanel retains the bounded recorder handshake and adds switch messaging without executeScript", () => {
   assert.equal(manifest.version, "0.2.0");
-  assert.match(manifest.version_name, /0\.2\.0-dev1-integrated-chat-work-switcher/);
+  assert.match(manifest.version_name, /0\.2\.0-dev2-sidepanel-self-heal/);
   assert.equal(manifest.side_panel.default_path, "sidepanel.html");
   assert.match(html, /<script src="sidepanel\.js"><\/script>/);
   assert.match(html, /<script src="sidepanel-switch\.js"><\/script>/);
