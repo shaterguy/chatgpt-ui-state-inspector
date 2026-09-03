@@ -12,7 +12,7 @@
   }
 
   function syncBridgeState() {
-    if (bridgeReady) postToBridge('RS_SET_CAPTURE_ENABLED', { enabled: captureEnabled });
+    postToBridge('RS_SET_CAPTURE_ENABLED', { enabled: captureEnabled });
   }
 
   async function hydrateCaptureState() {
@@ -31,7 +31,10 @@
       syncBridgeState();
       return;
     }
-    if (data.type === 'RS_CAPTURE_STATE') return;
+    if (data.type === 'RS_CAPTURE_STATE') {
+      bridgeReady = true;
+      return;
+    }
     if (data.type !== 'RS_CAPTURED' || !captureEnabled) return;
 
     chrome.runtime.sendMessage({
