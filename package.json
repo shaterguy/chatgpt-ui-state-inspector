@@ -1,8 +1,8 @@
 {
   "name": "chatgpt-ui-state-inspector",
-  "version": "0.1.0",
+  "version": "0.2.0-dev.1",
   "private": true,
-  "description": "Chronological ChatGPT UI state recorder Chrome extension",
+  "description": "ChatGPT UI state recorder with same-conversation Chat/Work switching",
   "scripts": {
     "test": "node --test",
     "validate": "node scripts/validate-package.mjs"

@@ -1,97 +1,96 @@
 # ChatGPT UI State Inspector
 
-ChatGPT UI State Inspector는 데스크톱 Chrome의 ChatGPT UI에서 한 번의 전체 조작 흐름과 대화 턴의 상태 전이를 시간순으로 기록하는 Manifest V3 확장프로그램입니다.
+`v0.2.0-dev1`은 기존 UI/턴 상태 Inspector와 Chat ↔ Work Switcher를 하나의 Manifest V3 확장프로그램으로 통합한 TEST 버전입니다.
 
-기록 제목을 입력하고 시작한 뒤 Chat/Work 전환, 모델 선택, 추론 수준 선택, 프롬프트 전송 등을 수행하면 클릭·DOM 변화와 함께 다음 canonical 상태가 기록됩니다.
+## 통합 기능
 
-- `IDLE`: 생성 중인 턴이 없음
-- `THINKING`: 프롬프트 전송 후 첫 사용자 표시 답변이 나오기 전
-- `ANSWERING`: 첫 사용자 표시 답변이 나온 뒤 스트리밍이 끝나기 전
-- `COMPLETE`: 응답 스트림 또는 동등한 DOM 완료 신호가 끝남
-- `ERROR`: 활성 턴의 전송·생성 오류
+### Chat ↔ Work 전환
 
-## 상태 접근 인터페이스
+사이드 패널 상단에서 현재 `/c/<conversation_id>` 대화의 다음 전송부터 Chat 또는 Work 요청 프로필을 선택할 수 있습니다.
 
-기록기가 연결된 ChatGPT 탭의 페이지 콘솔에서 현재 상태를 바로 읽을 수 있습니다.
+- Chat 기본값: `gpt-5-6-thinking` / `max`
+- Work 기본값: `gpt-5.6-luna-wm` / `standard`
+- 모델·추론 수준은 사이드 패널에서 직접 바꿀 수 있습니다.
+- 전환 응답 완료 후 같은 대화를 자동 새로고침하는 옵션을 제공합니다.
+- 전환을 해제하면 원래 ChatGPT 요청을 그대로 보냅니다.
+
+전환기는 기존 Chat ↔ Work Switcher의 same-conversation 안전 계약을 유지합니다.
+
+- 활성 URL의 `conversation_id`와 요청 본문의 `conversation_id`가 다르면 전환을 해제합니다.
+- 전환 대상은 `POST /backend-api/f/conversation`의 실제 메시지 전송 요청으로 제한합니다.
+- `conversation_id`와 전체 `messages` 배열은 변환 전 값을 복원합니다.
+- 변경 가능한 필드는 `model`, `thinking_effort`, `conversation_origin`, `service_tier`만 허용합니다.
+- 예상 source profile과 다르면 요청을 수정하지 않습니다.
+- 네트워크/HTTP 실패 시 전환을 해제하며 실패한 요청을 자동 재전송하지 않습니다.
+
+## 상태 기록
+
+기존 Inspector 기능은 그대로 유지됩니다.
+
+- `IDLE`
+- `THINKING`
+- `ANSWERING`
+- `COMPLETE`
+- `ERROR`
+
+기록 세션에는 클릭·DOM 구조 변화, sanitized 프로토콜 메타데이터, canonical turn state가 시간순으로 저장됩니다. JSON, JSONL, CSV, Markdown으로 내보낼 수 있습니다.
+
+페이지 콘솔에서 현재 상태를 읽는 기존 인터페이스도 유지됩니다.
 
 ```js
 window.__CHATGPT_UI_STATE_INSPECTOR_STATE__.phase
 ```
 
-전체 상태 스냅샷:
+## 단일 네트워크 훅
 
-```js
-window.__CHATGPT_UI_STATE_INSPECTOR_STATE__
-```
+두 기존 확장프로그램을 단순히 동시에 주입하지 않습니다. MAIN world의 기존 `page-probe.js` 하나가 ChatGPT의 원래 `fetch`를 한 번만 감싸며 다음 두 역할을 함께 수행합니다.
 
-상태 전이 이벤트:
+1. 기존 turn-state/프로토콜 관찰
+2. 사용자가 전환을 명시적으로 활성화한 경우에만 allowlist 제어 필드 변환
 
-```js
-window.addEventListener("chatgpt-ui-state-inspector:phasechange", (event) => {
-  console.log(event.detail.phase, event.detail);
-});
-```
+응답 기록과 전환 완료 감시는 모두 `response.clone()`을 사용하며 페이지가 받는 원본 응답 스트림을 소비하지 않습니다.
 
-이 인터페이스는 확장 자체의 canonical 상태입니다. ChatGPT의 비공개 minified 변수명을 외부 계약으로 노출하지 않습니다.
+## 개인정보·보안 경계
 
-## 판정 신호
+- 입력 필드 값, 프롬프트, 대화 메시지 본문, 헤더, 쿠키, 인증정보를 저장하지 않습니다.
+- 전환 시 요청 JSON은 전송 직전에 메모리에서만 파싱하며 원문이나 변환본을 `chrome.storage`에 기록하지 않습니다.
+- 확장프로그램 자체의 외부 네트워크 요청·텔레메트리는 없습니다.
+- `host_permissions`를 추가하지 않았습니다.
+- 기존 권한 `activeTab`, `scripting`, `storage`, `unlimitedStorage`, `sidePanel`만 사용합니다.
+- MAIN world에는 `chrome.*` 또는 영구 브라우저 저장소 접근이 없습니다.
 
-상태 판정은 하나의 DOM 선택자에 의존하지 않고 다음 신호를 우선순위와 신뢰도로 결합합니다.
+## 아이콘
 
-1. ChatGPT가 이미 수행하는 `fetch` SSE와 WebSocket 이벤트의 정규화된 메타데이터
-2. `message_marker / user_visible_token / first`, `message_stream_complete`, `finished_successfully + end_turn` 같은 프로토콜 패턴
-3. `role=status` live region, 생성 중지 버튼, 새 assistant turn, 완료 action과 같은 DOM fallback
-
-MAIN-world probe는 기존 `fetch`와 `WebSocket`을 그대로 호출하며 응답 복제본만 관찰합니다. 확장프로그램이 새 네트워크 요청을 만들거나 원래 스트림을 소비하지 않습니다.
-
-## 기록 내용
-
-- 세션 시작 시 보이는 상호작용 요소의 구조적 기준 스냅샷
-- 모든 신뢰된 사용자 클릭과 화면 내 좌표
-- 대상 요소의 태그, 역할, ARIA 상태, `data-testid`, `data-state`, 안정적 클래스 토큰
-- 클릭 직전 및 0ms/250ms/900ms 뒤의 관련 UI 스냅샷
-- 클릭과 연결된 DOM attribute/childList 변경 묶음
-- 클릭과 무관하게 발생한 비동기 DOM 변경 묶음
-- `IDLE → THINKING → ANSWERING → COMPLETE` 상태 전이와 신뢰도·근거 신호
-- 프로토콜 이벤트의 종류·상태·marker·역할·키 목록·바이트 길이
-- 경로 이동 및 페이지 새로고침 후 자동 기록 재개
-- JSON, JSONL, CSV, Markdown 전체 세션 내보내기
-
-입력 필드 값, 프롬프트, 대화 메시지 본문, 요청·응답 본문, 헤더, 쿠키, 인증정보, 긴 자유 텍스트는 저장하지 않습니다. 외부 전송이나 원격 분석 기능도 없습니다.
+service worker가 Chrome 공식 `action.setIcon({imageData})` 경로와 `OffscreenCanvas`를 사용해 ↔ 모양의 전용 툴바 아이콘을 16/32/48/128 크기로 생성합니다. 외부 이미지나 원격 자산을 사용하지 않습니다.
 
 ## 설치
 
-1. GitHub Actions의 테스트 아티팩트를 내려받아 압축을 풉니다.
-2. Chrome에서 `chrome://extensions`를 엽니다.
-3. **개발자 모드**를 켭니다.
-4. **압축해제된 확장 프로그램을 로드합니다**를 누르고 `manifest.json`이 있는 폴더를 선택합니다.
-5. `https://chatgpt.com` 탭을 새로 열거나 새로고침한 뒤 확장프로그램 아이콘을 누릅니다.
-
-이전 버전 content script가 이미 연결된 탭에서는 안전하게 중복 주입하지 않고 새로고침을 요구합니다.
+1. GitHub Actions의 `v0.2.0-dev1` TEST artifact를 받습니다.
+2. artifact 안의 `extension/` 디렉터리를 꺼냅니다.
+3. Chrome에서 `chrome://extensions`를 엽니다.
+4. 개발자 모드를 켭니다.
+5. **압축해제된 확장 프로그램을 로드합니다**에서 `manifest.json`이 있는 `extension/` 폴더를 선택합니다.
+6. 기존에 열려 있던 `https://chatgpt.com` 탭은 한 번 새로고침합니다.
+7. 확장 아이콘을 누르면 사이드 패널이 열립니다.
 
 ## 사용
 
-1. 사이드 패널의 기록 제목을 입력합니다.
+### Chat/Work 전환
+
+1. 기존 `/c/...` 대화를 엽니다.
+2. 사이드 패널에서 대상 모드의 모델·추론 수준을 확인합니다.
+3. **Chat로 전환** 또는 **Work로 전환**을 누릅니다.
+4. 같은 대화에서 메시지를 전송합니다.
+5. 사이드 패널 상태가 `요청 전환 적용됨` → `전환 응답 완료`로 진행되는지 확인합니다.
+
+실제 ChatGPT 서버의 내부 프로필 규약이 변경되어 source profile이 맞지 않으면 확장프로그램은 fail-closed로 원래 요청을 그대로 유지합니다.
+
+### 기록
+
+1. 기록 제목을 입력합니다.
 2. **기록 시작**을 누릅니다.
-3. ChatGPT에서 프롬프트를 전송하고 대화 상태 전이를 관찰합니다.
-4. 사이드 패널의 canonical 상태와 최근 전이 이벤트를 확인합니다.
-5. **기록 종료** 후 JSON 또는 JSONL로 저장합니다.
-
-AI 분석이나 자동화 코드 작성에는 전체 구조를 보존하는 JSON 또는 한 줄 단위 처리가 쉬운 JSONL을 권장합니다.
-
-## 권한과 실행 경계
-
-| 권한/범위 | 목적 |
-| --- | --- |
-| `https://chatgpt.com/*` MAIN content script | 기존 ChatGPT 전송의 정규화된 상태 메타데이터 관찰 |
-| `https://chatgpt.com/*` ISOLATED content script | DOM 상태 판정, 이벤트 저장과 확장 메시지 처리 |
-| `sidePanel` | 검사 화면과 분리된 기록 제어 UI |
-| `activeTab` | 사용자가 확장프로그램을 연 현재 탭에만 임시 접근 |
-| `scripting` | 설치 전에 열려 있던 ChatGPT 탭에 두 실행 world를 연결 |
-| `storage` | 세션·이벤트를 로컬에 보존 |
-| `unlimitedStorage` | 반복 조작이 많은 긴 세션의 저장 공간 확보 |
-
-`host_permissions`는 요청하지 않습니다. MAIN-world probe에는 `chrome.*` API, 영구 저장소 접근, 외부 송신 기능이 없습니다.
+3. ChatGPT를 사용합니다.
+4. **기록 종료** 후 저장된 세션을 원하는 형식으로 내보냅니다.
 
 ## 개발 및 검증
 
@@ -100,22 +99,11 @@ node --test
 node scripts/validate-package.mjs
 ```
 
-GitHub Actions는 다음 항목을 검증합니다.
+GitHub Actions는 `v*-dev*` push에서 JavaScript 구문, 단위/계약 테스트, 패키지 보안 경계, loadable archive 구조를 검증하고 unpacked `extension/` 디렉터리를 TEST artifact로 업로드합니다.
 
-- JavaScript 구문과 상태 머신·프로토콜 parser 단위 테스트
-- Manifest의 고정 `chatgpt.com` 범위와 MAIN/ISOLATED 분리
-- MAIN probe의 확장 API·영구 저장소·원문 소비 금지
-- 대화 본문·요청 본문이 정규화 메타데이터에 포함되지 않는지 검증
-- 압축 해제 후 Chrome에서 바로 로드 가능한 패키지 구조
+## 알려진 검증 공백
 
-## 제한
-
-- `THINKING → ANSWERING`은 모델 내부 추론 종료 자체가 아니라 첫 사용자 표시 답변 신호를 기준으로 합니다.
-- ChatGPT가 비공개 전송 형식이나 DOM 구조를 변경하면 일부 프로토콜 신호가 사라질 수 있으며, 이때 DOM fallback과 신뢰도 값으로 판정합니다.
-- 폐쇄형 Shadow DOM이나 iframe 안쪽은 일반 content script가 직접 관찰할 수 없습니다.
-- 실제 계정의 Instant·Thinking·도구 호출 모드별 신호 재현은 설치 후 사용자 환경에서 사후 확인해야 합니다.
-
-세부 이벤트 계약은 [STATE_PROTOCOL.md](STATE_PROTOCOL.md)를 참조하십시오.
+자동 테스트는 요청 변환 규칙, 비회귀 조건과 패키지 구조를 검증합니다. 실제 계정에서 Chat → Work → Chat이 서버에서 목표 모드로 실행되는지 여부는 ChatGPT 비공개 서버 규약에 의존하므로 설치 후 사후 실브라우저 확인 항목입니다.
 
 ## 라이선스
 

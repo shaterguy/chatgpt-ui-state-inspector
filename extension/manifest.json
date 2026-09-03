@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT UI State Inspector",
-  "version": "0.1.8",
-  "version_name": "0.1.8-dev12-work-native-final-channel",
-  "description": "Record ChatGPT UI events, canonical turn states, and sanitized Work websocket protocol structure.",
+  "version": "0.2.0",
+  "version_name": "0.2.0-dev1-integrated-chat-work-switcher",
+  "description": "Inspect ChatGPT turn states and optionally switch Chat/Work request profiles inside the same conversation.",
   "minimum_chrome_version": "114",
   "permissions": [
     "activeTab",
@@ -30,6 +30,7 @@
         "lib/protocol.js",
         "lib/protocol-structure-carrier.js",
         "lib/work-native-state.js",
+        "lib/chat-work-switch-core.js",
         "page-probe.js"
       ],
       "run_at": "document_start",
@@ -43,6 +44,7 @@
         "lib/core.js",
         "lib/turn-state.js",
         "content.js",
+        "switch-controller.js",
         "handshake.js"
       ],
       "run_at": "document_start",

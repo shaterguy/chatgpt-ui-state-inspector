@@ -3,11 +3,13 @@
 
   const PROTOCOL_VERSION = "1.1.0";
   const CHANNEL = "chatgpt-ui-state-inspector@1";
+  const SWITCH_CHANNEL = "chatgpt-ui-state-inspector-switch@1";
   const MARKER = "__CHATGPT_UI_STATE_INSPECTOR_PAGE_PROBE__";
   const PUBLIC_STATE = "__CHATGPT_UI_STATE_INSPECTOR_STATE__";
   const PUBLIC_PHASES = "__CHATGPT_UI_STATE_INSPECTOR_PHASES__";
   const PHASE_EVENT = "chatgpt-ui-state-inspector:phasechange";
   const Protocol = globalThis.UiStateInspectorProtocol;
+  const SwitchCore = globalThis.UiStateInspectorChatWorkSwitchCore;
   const MAX_STREAM_BUFFER = 512000;
   const MAX_FRAME_COUNT = 10000;
   const MAX_SOCKET_TEXT = 1000000;
@@ -15,8 +17,11 @@
   if (globalThis[MARKER]?.version === PROTOCOL_VERSION) return;
 
   let bridgeToken = null;
+  let switchBridgeToken = null;
   let enabled = false;
   let requestSequence = 0;
+  let switchSequence = 0;
+  let activeSwitch = null;
   let publishedState = Object.freeze({
     protocolVersion: PROTOCOL_VERSION,
     phase: "IDLE",
@@ -75,15 +80,18 @@
   function post(type, payload = {}) {
     if (!bridgeToken) return;
     try {
-      window.postMessage({
-        channel: CHANNEL,
-        direction: "probe",
-        token: bridgeToken,
-        type,
-        payload
-      }, location.origin);
+      window.postMessage({channel: CHANNEL, direction: "probe", token: bridgeToken, type, payload}, location.origin);
     } catch {
-      // The probe is observational and must always fail open.
+      // Recorder observation must always fail open.
+    }
+  }
+
+  function postSwitch(type, payload = {}) {
+    if (!switchBridgeToken) return;
+    try {
+      window.postMessage({channel: SWITCH_CHANNEL, direction: "probe", token: switchBridgeToken, type, payload}, location.origin);
+    } catch {
+      // Switch status reporting must never block ChatGPT.
     }
   }
 
@@ -107,15 +115,17 @@
     }
   }
 
+  function currentConversationId() {
+    return location.pathname.match(/\/c\/([0-9a-z-]+)/i)?.[1] || null;
+  }
+
   function requestMetadata(input, init) {
     const isRequest = typeof Request !== "undefined" && input instanceof Request;
     const url = parsedUrl(isRequest ? input.url : input);
     const method = String(init?.method || (isRequest ? input.method : "GET") || "GET").toUpperCase();
     const sameOrigin = url?.origin === location.origin;
     const path = sameOrigin ? url.pathname.slice(0, 240) : null;
-    const conversation = Boolean(
-      sameOrigin && method === "POST" && /\/(?:conversation|responses)(?:\/|$)/i.test(path || "")
-    );
+    const conversation = Boolean(sameOrigin && method === "POST" && /\/(?:conversation|responses)(?:\/|$)/i.test(path || ""));
     return {method, sameOrigin, path, conversation};
   }
 
@@ -173,12 +183,7 @@
         buffer += decoder.decode(value, {stream: true});
         buffer = buffer.replace(/\r\n/g, "\n");
         if (buffer.length > MAX_STREAM_BUFFER) {
-          post("probe_error", {
-            stage: "sse-buffer",
-            name: "FrameBufferLimit",
-            requestId: context.requestId,
-            path: context.path
-          });
+          post("probe_error", {stage: "sse-buffer", name: "FrameBufferLimit", requestId: context.requestId, path: context.path});
           buffer = buffer.slice(-Math.floor(MAX_STREAM_BUFFER / 2));
         }
         let boundary;
@@ -191,20 +196,152 @@
       buffer += decoder.decode();
       if (enabled && buffer.trim()) processSseBlock(buffer, context);
       if (!enabled) await reader.cancel().catch(() => {});
-      post("transport_complete", {
-        transport: context.transport,
-        requestId: context.requestId,
-        path: context.path,
-        frames: context.frameIndex
-      });
+      post("transport_complete", {transport: context.transport, requestId: context.requestId, path: context.path, frames: context.frameIndex});
     } catch (error) {
-      post("probe_error", {
-        stage: "sse-read",
-        name: safeText(error?.name, 60) || "Error",
-        requestId: context.requestId,
-        path: context.path
-      });
+      post("probe_error", {stage: "sse-read", name: safeText(error?.name, 60) || "Error", requestId: context.requestId, path: context.path});
     }
+  }
+
+  function switchSnapshot(status, reason = null, extra = {}) {
+    return {
+      ready: Boolean(SwitchCore),
+      status,
+      reason: safeText(reason, 80),
+      mode: activeSwitch?.mode || extra.mode || null,
+      model: activeSwitch?.model || extra.model || null,
+      thinkingEffort: activeSwitch?.thinkingEffort || extra.thinkingEffort || null,
+      autoReload: activeSwitch?.autoReload ?? extra.autoReload ?? true,
+      conversationIdMatches: activeSwitch ? currentConversationId() === activeSwitch.conversationId : null,
+      ...extra
+    };
+  }
+
+  function disableSwitch(reason, extra = {}) {
+    const previous = activeSwitch;
+    activeSwitch = null;
+    postSwitch("switch_state", switchSnapshot("disabled", reason, {
+      mode: previous?.mode || null,
+      model: previous?.model || null,
+      thinkingEffort: previous?.thinkingEffort || null,
+      autoReload: previous?.autoReload ?? true,
+      ...extra
+    }));
+  }
+
+  function armSwitch(payload) {
+    const conversationId = currentConversationId();
+    const config = SwitchCore?.buildConfig?.(payload?.mode, {
+      model: payload?.model,
+      thinkingEffort: payload?.thinkingEffort,
+      autoReload: payload?.autoReload
+    }, conversationId);
+    if (!config || config.endpoint !== SwitchCore.ENDPOINT) {
+      activeSwitch = null;
+      postSwitch("switch_state", switchSnapshot("rejected", "invalid-config"));
+      return;
+    }
+    switchSequence += 1;
+    activeSwitch = {...config, switchSequence};
+    postSwitch("switch_state", switchSnapshot("armed", null));
+  }
+
+  async function readRequestBody(input, init) {
+    if (typeof init?.body === "string") return init.body;
+    if (typeof Request !== "undefined" && input instanceof Request && init?.body == null) {
+      try {
+        return await input.clone().text();
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  async function prepareSwitchArgs(args, meta) {
+    if (!activeSwitch || !SwitchCore || !meta.conversation || meta.path !== activeSwitch.endpoint) return {args, context: null};
+    const currentId = currentConversationId();
+    if (!currentId || currentId !== activeSwitch.conversationId) {
+      disableSwitch("conversation-changed");
+      return {args, context: null};
+    }
+    const bodyText = await readRequestBody(args[0], args[1]);
+    if (typeof bodyText !== "string" || !bodyText.trim().startsWith("{")) return {args, context: null};
+    let body;
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      postSwitch("switch_state", switchSnapshot("bypassed", "body-parse-failed"));
+      return {args, context: null};
+    }
+    if (!Array.isArray(body?.messages)) return {args, context: null};
+    const bodyConversationId = typeof body.conversation_id === "string" ? body.conversation_id : null;
+    if (bodyConversationId && bodyConversationId !== currentId) {
+      disableSwitch("conversation-id-mismatch");
+      return {args, context: null};
+    }
+    const transformed = SwitchCore.transformBody(body, activeSwitch);
+    if (!transformed.transformed) {
+      if (transformed.status === "source-profile-mismatch") {
+        postSwitch("switch_state", switchSnapshot("bypassed", transformed.status));
+      }
+      return {args, context: null};
+    }
+    const nextBody = JSON.stringify(transformed.body);
+    const nextArgs = [...args];
+    try {
+      if (typeof Request !== "undefined" && args[0] instanceof Request) {
+        nextArgs[0] = new Request(args[0], {...(args[1] || {}), body: nextBody});
+        nextArgs[1] = undefined;
+      } else {
+        nextArgs[1] = {...(args[1] || {}), body: nextBody};
+      }
+    } catch {
+      disableSwitch("request-rebuild-failure");
+      return {args, context: null};
+    }
+    const context = {
+      mode: activeSwitch.mode,
+      conversationId: activeSwitch.conversationId,
+      autoReload: activeSwitch.autoReload,
+      switchSequence: activeSwitch.switchSequence,
+      operationCount: transformed.applied
+    };
+    postSwitch("switch_state", switchSnapshot("applied", null, {operationCount: transformed.applied}));
+    return {args: nextArgs, context};
+  }
+
+  async function monitorSwitchResponse(response, context) {
+    if (!context) return;
+    if (!response?.ok) {
+      disableSwitch("http-failure", {statusCode: Number(response?.status) || null});
+      return;
+    }
+    let clone;
+    try {
+      clone = response.clone();
+    } catch {
+      postSwitch("switch_state", switchSnapshot("response-ok", "clone-unavailable"));
+      return;
+    }
+    const reader = clone.body?.getReader?.();
+    if (reader) {
+      try {
+        while (true) {
+          const {done} = await reader.read();
+          if (done) break;
+        }
+      } catch {
+        postSwitch("switch_state", switchSnapshot("response-ok", "completion-monitor-failed"));
+        return;
+      }
+    }
+    if (!activeSwitch || activeSwitch.switchSequence !== context.switchSequence) return;
+    if (currentConversationId() !== context.conversationId) {
+      disableSwitch("conversation-changed-after-response");
+      return;
+    }
+    postSwitch("switch_state", switchSnapshot("complete", null, {operationCount: context.operationCount}));
+    if (context.autoReload) setTimeout(() => location.reload(), 250);
   }
 
   function installFetchProbe() {
@@ -215,68 +352,37 @@
       const requestId = nextRequestId("fetch");
       if (enabled && meta.conversation) {
         post("transport_request", {transport: "fetch", requestId, method: meta.method, path: meta.path, category: "conversation"});
-        stateSignal("PROMPT_SUBMITTED", {
-          confidence: 0.9,
-          reason: "same-origin conversation POST",
-          source: "fetch",
-          transport: "fetch",
-          requestId
-        });
+        stateSignal("PROMPT_SUBMITTED", {confidence: 0.9, reason: "same-origin conversation POST", source: "fetch", transport: "fetch", requestId});
       }
+      const prepared = await prepareSwitchArgs(args, meta);
       let response;
       try {
-        response = await Reflect.apply(nativeFetch, this, args);
+        response = await Reflect.apply(nativeFetch, this, prepared.args);
       } catch (error) {
+        if (prepared.context) disableSwitch("network-failure");
         if (enabled && meta.conversation) {
           post("transport_error", {transport: "fetch", requestId, path: meta.path, name: safeText(error?.name, 60) || "Error"});
-          stateSignal("GENERATION_ERROR", {
-            confidence: 0.9,
-            reason: "conversation request rejected",
-            source: "fetch",
-            transport: "fetch",
-            requestId
-          });
+          stateSignal("GENERATION_ERROR", {confidence: 0.9, reason: "conversation request rejected", source: "fetch", transport: "fetch", requestId});
         }
         throw error;
       }
+      if (prepared.context) void monitorSwitchResponse(response, prepared.context);
       if (enabled) {
         try {
           const contentType = response.headers?.get?.("content-type") || "";
           const eventStream = /text\/event-stream/i.test(contentType);
           if (meta.conversation || eventStream) {
-            post("transport_response", {
-              transport: "fetch",
-              requestId,
-              path: meta.path,
-              status: response.status,
-              eventStream
-            });
+            post("transport_response", {transport: "fetch", requestId, path: meta.path, status: response.status, eventStream});
           }
           if (response.status >= 400 && meta.conversation) {
-            stateSignal("GENERATION_ERROR", {
-              confidence: 0.92,
-              reason: `conversation response status ${response.status}`,
-              source: "fetch",
-              transport: "fetch",
-              requestId
-            });
+            stateSignal("GENERATION_ERROR", {confidence: 0.92, reason: `conversation response status ${response.status}`, source: "fetch", transport: "fetch", requestId});
           }
           if (eventStream && response.body) {
             const clone = response.clone();
-            void inspectSseResponse(clone, {
-              transport: "fetch-sse",
-              requestId,
-              path: meta.path,
-              frameIndex: 0
-            });
+            void inspectSseResponse(clone, {transport: "fetch-sse", requestId, path: meta.path, frameIndex: 0});
           }
         } catch (error) {
-          post("probe_error", {
-            stage: "fetch-response",
-            name: safeText(error?.name, 60) || "Error",
-            requestId,
-            path: meta.path
-          });
+          post("probe_error", {stage: "fetch-response", name: safeText(error?.name, 60) || "Error", requestId, path: meta.path});
         }
       }
       return response;
@@ -322,32 +428,13 @@
         inspectSocketText(data.slice(0, MAX_SOCKET_TEXT), context);
       } else if (typeof Blob !== "undefined" && data instanceof Blob) {
         if (data.size <= MAX_SOCKET_TEXT) inspectSocketText(await data.text(), context);
-        else post("protocol_frame", {
-          transport: context.transport,
-          requestId: context.requestId,
-          path: context.path,
-          frameIndex: ++context.frameIndex,
-          summary: {type: "binary_frame", byteLength: data.size, parseError: false},
-          signals: []
-        });
+        else post("protocol_frame", {transport: context.transport, requestId: context.requestId, path: context.path, frameIndex: ++context.frameIndex, summary: {type: "binary_frame", byteLength: data.size, parseError: false}, signals: []});
       } else {
         const size = data?.byteLength ?? null;
-        post("protocol_frame", {
-          transport: context.transport,
-          requestId: context.requestId,
-          path: context.path,
-          frameIndex: ++context.frameIndex,
-          summary: {type: "binary_frame", byteLength: Number(size) || 0, parseError: false},
-          signals: []
-        });
+        post("protocol_frame", {transport: context.transport, requestId: context.requestId, path: context.path, frameIndex: ++context.frameIndex, summary: {type: "binary_frame", byteLength: Number(size) || 0, parseError: false}, signals: []});
       }
     } catch (error) {
-      post("probe_error", {
-        stage: "websocket-message",
-        name: safeText(error?.name, 60) || "Error",
-        requestId: context.requestId,
-        path: context.path
-      });
+      post("probe_error", {stage: "websocket-message", name: safeText(error?.name, 60) || "Error", requestId: context.requestId, path: context.path});
     }
   }
 
@@ -359,24 +446,11 @@
       const socket = arguments.length > 1 ? new NativeWebSocket(url, protocols) : new NativeWebSocket(url);
       if (!socketAllowed(url)) return socket;
       const parsed = parsedUrl(url);
-      const context = {
-        transport: "websocket",
-        requestId: nextRequestId("ws"),
-        path: parsed?.pathname?.slice(0, 240) || null,
-        frameIndex: 0
-      };
-      socket.addEventListener("open", () => {
-        if (enabled) post("transport_response", {...context, status: 101, eventStream: false});
-      });
-      socket.addEventListener("message", (event) => {
-        if (enabled) void inspectSocketData(event.data, context);
-      });
-      socket.addEventListener("close", (event) => {
-        if (enabled) post("transport_complete", {...context, code: event.code, clean: event.wasClean, frames: context.frameIndex});
-      });
-      socket.addEventListener("error", () => {
-        if (enabled) post("transport_error", {...context, name: "WebSocketError"});
-      });
+      const context = {transport: "websocket", requestId: nextRequestId("ws"), path: parsed?.pathname?.slice(0, 240) || null, frameIndex: 0};
+      socket.addEventListener("open", () => { if (enabled) post("transport_response", {...context, status: 101, eventStream: false}); });
+      socket.addEventListener("message", (event) => { if (enabled) void inspectSocketData(event.data, context); });
+      socket.addEventListener("close", (event) => { if (enabled) post("transport_complete", {...context, code: event.code, clean: event.wasClean, frames: context.frameIndex}); });
+      socket.addEventListener("error", () => { if (enabled) post("transport_error", {...context, name: "WebSocketError"}); });
       return socket;
     }
     try {
@@ -396,14 +470,39 @@
     Object.defineProperty(globalThis, MARKER, {
       configurable: true,
       enumerable: false,
-      value: Object.freeze({version: PROTOCOL_VERSION, transports})
+      value: Object.freeze({version: PROTOCOL_VERSION, transports, switchCore: SwitchCore?.BUILD_ID || null})
     });
   } catch {}
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== location.origin) return;
     const message = event.data;
-    if (!message || message.channel !== CHANNEL || message.direction !== "content") return;
+    if (!message || typeof message !== "object") return;
+
+    if (message.channel === SWITCH_CHANNEL && message.direction === "content") {
+      const token = typeof message.token === "string" && message.token.length <= 100 ? message.token : null;
+      if (!token) return;
+      if (message.type === "init") {
+        if (!switchBridgeToken || switchBridgeToken === token) switchBridgeToken = token;
+        if (switchBridgeToken === token) postSwitch("switch_state", switchSnapshot("ready", null));
+        return;
+      }
+      if (token !== switchBridgeToken) return;
+      if (message.type === "set_switch") {
+        armSwitch(message.payload || {});
+        return;
+      }
+      if (message.type === "disable_switch") {
+        disableSwitch("user-disabled");
+        return;
+      }
+      if (message.type === "get_switch_state") {
+        postSwitch("switch_state", switchSnapshot(activeSwitch ? "armed" : "ready", null));
+      }
+      return;
+    }
+
+    if (message.channel !== CHANNEL || message.direction !== "content") return;
     const token = typeof message.token === "string" && message.token.length <= 100 ? message.token : null;
     if (!token) return;
     if (message.type === "init") {

@@ -8,21 +8,24 @@ const extensionRoot = path.join(repositoryRoot, "extension");
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, "manifest.json"), "utf8"));
 
 assert.equal(manifest.manifest_version, 3);
+assert.equal(manifest.version, "0.2.0");
+assert.match(manifest.version_name, /0\.2\.0-dev1/);
 assert.equal(manifest.content_scripts.length, 2);
 assert.deepEqual(
   [...new Set(manifest.content_scripts.flatMap((item) => item.matches))],
   ["https://chatgpt.com/*"]
 );
 assert.equal(manifest.host_permissions, undefined);
+assert.deepEqual(manifest.content_scripts.map((item) => item.world), ["MAIN", "ISOLATED"]);
 assert.deepEqual(
-  manifest.content_scripts.map((item) => item.world),
-  ["MAIN", "ISOLATED"]
+  [...manifest.permissions].sort(),
+  ["activeTab", "scripting", "sidePanel", "storage", "unlimitedStorage"].sort()
 );
 
 const required = [
-  "manifest.json", "background.js", "content.js", "page-probe.js",
-  "sidepanel.html", "sidepanel.css", "sidepanel.js", "lib/core.js",
-  "lib/protocol.js", "lib/turn-state.js"
+  "manifest.json", "background.js", "content.js", "switch-controller.js", "page-probe.js",
+  "sidepanel.html", "sidepanel.css", "sidepanel.js", "sidepanel-switch.js", "lib/core.js",
+  "lib/protocol.js", "lib/turn-state.js", "lib/chat-work-switch-core.js"
 ];
 for (const file of required) {
   assert.equal(fs.existsSync(path.join(extensionRoot, file)), true, `Missing ${file}`);
@@ -45,6 +48,9 @@ assert.ok(packagedFiles.length >= required.length);
 const javascriptFiles = packagedFiles.filter((file) => file.endsWith(".js"));
 const pageProbePath = path.join(extensionRoot, "page-probe.js");
 const pageProbe = fs.readFileSync(pageProbePath, "utf8");
+const switchCore = fs.readFileSync(path.join(extensionRoot, "lib/chat-work-switch-core.js"), "utf8");
+const switchController = fs.readFileSync(path.join(extensionRoot, "switch-controller.js"), "utf8");
+const background = fs.readFileSync(path.join(extensionRoot, "background.js"), "utf8");
 const coreSource = fs.readFileSync(path.join(extensionRoot, "lib/core.js"), "utf8");
 const nonProbeJavascript = javascriptFiles
   .filter((file) => file !== pageProbePath)
@@ -59,7 +65,7 @@ for (const pattern of [
   /\bEventSource\b/,
   /\bsendBeacon\b/
 ]) {
-  assert.equal(pattern.test(nonProbeJavascript), false, `Network capability outside passive page probe: ${pattern}`);
+  assert.equal(pattern.test(nonProbeJavascript), false, `Network capability outside the single MAIN-world page probe: ${pattern}`);
 }
 for (const pattern of [/\beval\s*\(/, /new\s+Function\s*\(/]) {
   assert.equal(pattern.test(allJavascript), false, `Forbidden runtime code generation: ${pattern}`);
@@ -81,10 +87,23 @@ for (const pattern of [
   assert.equal(pattern.test(pageProbe), false, `Forbidden page-probe capability: ${pattern}`);
 }
 assert.match(pageProbe, /Reflect\.apply\(nativeFetch/);
-assert.match(pageProbe, /new NativeWebSocket/);
 assert.match(pageProbe, /response\.clone\(\)/);
+assert.match(pageProbe, /prepareSwitchArgs/);
+assert.match(pageProbe, /Array\.isArray\(body\?\.messages\)/);
+assert.match(pageProbe, /bodyConversationId && bodyConversationId !== currentId/);
+assert.match(pageProbe, /network-failure/);
 assert.match(pageProbe, /__CHATGPT_UI_STATE_INSPECTOR_STATE__/);
 assert.match(pageProbe, /chatgpt-ui-state-inspector:phasechange/);
+
+assert.match(switchCore, /ALLOWED_PATHS/);
+assert.match(switchCore, /\["model"\]/);
+assert.match(switchCore, /\["thinking_effort"\]/);
+assert.match(switchCore, /protectedConversationId/);
+assert.match(switchCore, /protectedMessages/);
+assert.doesNotMatch(switchController, /\b(?:localStorage|sessionStorage|indexedDB)\b/);
+assert.match(switchController, /sender\.id !== chrome\.runtime\.id/);
+assert.match(background, /new OffscreenCanvas/);
+assert.match(background, /chrome\.action\.setIcon/);
 assert.match(coreSource, /sanitizeProbeMessage/);
 assert.match(coreSource, /stopImmediatePropagation\(\)/);
 assert.match(coreSource, /new MessageEvent\("message"/);
@@ -93,4 +112,4 @@ const protocolSource = fs.readFileSync(path.join(extensionRoot, "lib/protocol.js
 assert.doesNotMatch(protocolSource, /parts\s*:\s*parts/);
 assert.doesNotMatch(protocolSource, /raw(?:Data|Payload|Body)\s*:/);
 
-console.log(`Validated ${packagedFiles.length} extension files with passive MAIN-world inspection, isolated payload allowlisting, and fixed chatgpt.com scope.`);
+console.log(`Validated ${packagedFiles.length} extension files with one MAIN-world network hook, allowlisted Chat/Work switching, isolated controls, and fixed chatgpt.com scope.`);

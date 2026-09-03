@@ -5,9 +5,55 @@ const META_PREFIX = "uiInspector:meta:";
 const CHUNK_PREFIX = "uiInspector:chunk:";
 let writeQueue = Promise.resolve();
 
+function createActionIcon(size) {
+  if (typeof OffscreenCanvas === "undefined") return null;
+  const canvas = new OffscreenCanvas(size, size);
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.clearRect(0, 0, size, size);
+  context.fillStyle = "#0f766e";
+  context.fillRect(0, 0, size, size);
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = Math.max(2, Math.round(size * 0.11));
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  const left = size * 0.22;
+  const right = size * 0.78;
+  const top = size * 0.36;
+  const bottom = size * 0.64;
+  const wing = size * 0.13;
+  context.beginPath();
+  context.moveTo(left, top);
+  context.lineTo(right, top);
+  context.moveTo(right, top);
+  context.lineTo(right - wing, top - wing);
+  context.moveTo(right, top);
+  context.lineTo(right - wing, top + wing);
+  context.moveTo(right, bottom);
+  context.lineTo(left, bottom);
+  context.moveTo(left, bottom);
+  context.lineTo(left + wing, bottom - wing);
+  context.moveTo(left, bottom);
+  context.lineTo(left + wing, bottom + wing);
+  context.stroke();
+  return context.getImageData(0, 0, size, size);
+}
+
+async function applyToolbarIcon() {
+  const imageData = {};
+  for (const size of [16, 32, 48, 128]) {
+    const icon = createActionIcon(size);
+    if (icon) imageData[size] = icon;
+  }
+  if (Object.keys(imageData).length) await chrome.action.setIcon({imageData});
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true}).catch(() => {});
+  applyToolbarIcon().catch(() => {});
 });
+chrome.runtime.onStartup.addListener(() => applyToolbarIcon().catch(() => {}));
+applyToolbarIcon().catch(() => {});
 
 function queueWrite(task) {
   const run = writeQueue.then(task, task);
