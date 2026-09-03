@@ -16,9 +16,9 @@ switchContext.globalThis = switchContext;
 vm.runInNewContext(switchSource, switchContext, {filename: "chat-work-switch-core.js"});
 const SwitchCore = switchContext.module.exports;
 
-test("integrated dev1 advances the extension version while retaining independently stamped parser builds", () => {
+test("sidepanel dev2 advances the extension identity while retaining independently stamped parser builds", () => {
   assert.equal(manifest.version, "0.2.0");
-  assert.match(manifest.version_name, /0\.2\.0-dev1/);
+  assert.match(manifest.version_name, /0\.2\.0-dev2/);
   const summary = Protocol.summarizePayload({status: "running"});
   assert.equal(summary.buildId, "0.1.1-dev5");
   assert.equal(SwitchCore.BUILD_ID, "0.2.0-dev1");
