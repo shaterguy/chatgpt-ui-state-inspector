@@ -5,6 +5,7 @@
   const ENABLED_KEY = 'chatGptRequestProfileCaptureEnabledV2';
   const PROFILES_KEY = 'chatGptRequestProfilesV2';
   const LEGACY_CAPTURES_KEY = 'chatGptRequestSnapshotCapturesV1';
+  const STATE_KEYS = [ENABLED_KEY, PROFILES_KEY, LEGACY_CAPTURES_KEY];
 
   const els = {
     start: document.getElementById('start-request-capture'),
@@ -36,6 +37,15 @@
     const response = await chrome.runtime.sendMessage({type, ...payload});
     if (!response?.ok) throw new Error(response?.error || `${type} 요청에 실패했습니다.`);
     return response.result;
+  }
+
+  async function readLocalState() {
+    const stored = await chrome.storage.local.get(STATE_KEYS);
+    return {
+      captureEnabled: stored[ENABLED_KEY] === true,
+      profiles: Array.isArray(stored[PROFILES_KEY]) ? stored[PROFILES_KEY] : [],
+      legacyCaptures: Array.isArray(stored[LEGACY_CAPTURES_KEY]) ? stored[LEGACY_CAPTURES_KEY] : []
+    };
   }
 
   function decoratedProfiles() {
@@ -110,20 +120,25 @@
     els.exportPreview.value = JSON.stringify(exportObject(), null, 2);
   }
 
-  async function refreshState({quiet = false} = {}) {
+  async function refreshState({quiet = false, migrateLegacy = false} = {}) {
     if (refreshing) {
       refreshQueued = true;
       return;
     }
     refreshing = true;
     let announce = !quiet;
+    let migrate = migrateLegacy;
     try {
       do {
         refreshQueued = false;
-        const state = await callBackground('GET_REQUEST_PROFILE_STATE');
-        captureEnabled = state?.captureEnabled === true;
-        profiles = Array.isArray(state?.profiles) ? state.profiles : [];
-        legacyCaptures = Array.isArray(state?.legacyCaptures) ? state.legacyCaptures : [];
+        if (migrate) {
+          migrate = false;
+          try { await callBackground('GET_REQUEST_PROFILE_STATE'); } catch {}
+        }
+        const state = await readLocalState();
+        captureEnabled = state.captureEnabled;
+        profiles = state.profiles;
+        legacyCaptures = state.legacyCaptures;
         render();
         if (announce) {
           setStatus(
@@ -199,5 +214,5 @@
     refreshState({quiet: true}).catch(() => {});
   });
 
-  refreshState().catch((error) => setStatus(error.message || String(error), 'error'));
+  refreshState({migrateLegacy: true}).catch((error) => setStatus(error.message || String(error), 'error'));
 })();
