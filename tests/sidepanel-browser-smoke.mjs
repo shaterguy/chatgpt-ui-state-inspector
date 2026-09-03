@@ -26,7 +26,6 @@ try {
   const sidePanelUrl = `chrome-extension://${extensionId}/sidepanel.html`;
   await directPage.goto(sidePanelUrl, {waitUntil: "load"});
   await directPage.waitForSelector("h1");
-  await directPage.waitForSelector("#request-profile-list .request-scenario");
 
   const direct = await directPage.evaluate(async () => {
     const visible = (node) => {
@@ -41,15 +40,16 @@ try {
       return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
     };
     const luminance = (rgb) => 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
-    const contrastRatio = (node) => {
-      const style = getComputedStyle(node);
-      const fg = luminance(parseRgb(style.color));
-      const bg = luminance(parseRgb(style.backgroundColor));
+    const contrastRatio = (foregroundNode, backgroundNode = foregroundNode) => {
+      const foreground = getComputedStyle(foregroundNode);
+      const background = getComputedStyle(backgroundNode);
+      const fg = luminance(parseRgb(foreground.color));
+      const bg = luminance(parseRgb(background.backgroundColor));
       return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
     };
     const cards = [...document.querySelectorAll(".card")];
-    const emptyProfileCard = document.querySelector("#request-profile-list .request-scenario");
     const summary = document.getElementById("request-profile-summary");
+    const exportPreview = document.getElementById("request-export-preview");
     return {
       title: document.title,
       heading: document.querySelector("h1")?.textContent || "",
@@ -60,8 +60,8 @@ try {
         .every((id) => Boolean(document.getElementById(id))),
       oldScenarioControls: ["chat-models", "chat-reasoning", "work-models", "work-reasoning", "generate-scenarios", "arm-next", "scenario-list"]
         .some((id) => Boolean(document.getElementById(id))),
-      requestProfileContrast: contrastRatio(emptyProfileCard),
       requestSummaryContrast: contrastRatio(summary),
+      requestExportContrast: contrastRatio(exportPreview),
       cardCount: cards.length,
       visibleCards: cards.filter(visible).length,
       bodyWidth: document.body.getBoundingClientRect().width,
@@ -77,8 +77,8 @@ try {
   if (!direct.headerVisible || !direct.calibratorVisible || !direct.stateRecorderVisible || !direct.autoCaptureControls || direct.visibleCards < 3) {
     throw new Error(`Integrated side panel render failed: ${JSON.stringify(direct)}`);
   }
-  if (direct.requestProfileContrast < 4.5 || direct.requestSummaryContrast < 4.5) {
-    throw new Error(`Request-profile light-theme contrast regression: ${JSON.stringify(direct)}`);
+  if (direct.requestSummaryContrast < 4.5 || direct.requestExportContrast < 4.5) {
+    throw new Error(`Request-profile static light-theme contrast regression: ${JSON.stringify(direct)}`);
   }
   if (direct.oldScenarioControls) throw new Error(`Old scenario controls are still present: ${JSON.stringify(direct)}`);
   if (direct.hasSwitchControls) throw new Error(`Unexpected Chat/Work switching UI: ${JSON.stringify(direct)}`);
@@ -182,6 +182,24 @@ try {
     return text.includes("매우 높음") && text.includes("gpt-5-6-thinking · 추론 max");
   }, {timeout: 5000});
 
+  const renderedProfileContrast = await directPage.evaluate(() => {
+    const parseRgb = (value) => (value.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+    const linear = (channel) => {
+      const c = channel / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = (rgb) => 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
+    const card = document.querySelector("#request-profile-list .request-scenario");
+    const title = card?.querySelector(".request-scenario-title");
+    if (!card || !title) return null;
+    const fg = luminance(parseRgb(getComputedStyle(title).color));
+    const bg = luminance(parseRgb(getComputedStyle(card).backgroundColor));
+    return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+  });
+  if (renderedProfileContrast === null || renderedProfileContrast < 4.5) {
+    throw new Error(`Rendered request-profile light-theme contrast regression: ${renderedProfileContrast}`);
+  }
+
   const profileState = await directPage.evaluate(async () => {
     const stored = await chrome.storage.local.get(["chatGptRequestProfilesV2", "chatGptRequestSnapshotCapturesV1"]);
     const exportJson = JSON.parse(document.getElementById("request-export-preview")?.value || "{}");
@@ -283,7 +301,8 @@ try {
       privateFieldsStored: false,
       outgoingBodiesPreserved: true,
       readableLabel: "매우 높음",
-      internalCombination: "gpt-5-6-thinking · 추론 max"
+      internalCombination: "gpt-5-6-thinking · 추론 max",
+      renderedProfileContrast
     },
     sidePanelContext: actual
   }));
