@@ -6,6 +6,12 @@ import {fileURLToPath} from "node:url";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extensionRoot = path.join(repositoryRoot, "extension");
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, "manifest.json"), "utf8"));
+const expectedIcons = {
+  "16": "icons/icon-16.png",
+  "32": "icons/icon-32.png",
+  "48": "icons/icon-48.png",
+  "128": "icons/icon-128.png"
+};
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.version, "0.2.0");
@@ -21,14 +27,24 @@ assert.deepEqual(
   [...manifest.permissions].sort(),
   ["activeTab", "scripting", "sidePanel", "storage", "unlimitedStorage"].sort()
 );
+assert.deepEqual(manifest.icons, expectedIcons);
+assert.deepEqual(manifest.action.default_icon, expectedIcons);
 
 const required = [
   "manifest.json", "background.js", "content.js", "switch-controller.js", "page-probe.js",
   "sidepanel.html", "sidepanel.css", "sidepanel.js", "sidepanel-switch.js", "lib/core.js",
-  "lib/protocol.js", "lib/turn-state.js", "lib/chat-work-switch-core.js"
+  "lib/protocol.js", "lib/turn-state.js", "lib/chat-work-switch-core.js",
+  ...Object.values(expectedIcons)
 ];
 for (const file of required) {
   assert.equal(fs.existsSync(path.join(extensionRoot, file)), true, `Missing ${file}`);
+}
+for (const [sizeText, file] of Object.entries(expectedIcons)) {
+  const size = Number(sizeText);
+  const icon = fs.readFileSync(path.join(extensionRoot, file));
+  assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], `Invalid PNG signature: ${file}`);
+  assert.equal(icon.readUInt32BE(16), size, `Unexpected icon width: ${file}`);
+  assert.equal(icon.readUInt32BE(20), size, `Unexpected icon height: ${file}`);
 }
 
 const forbiddenNames = new Set([
@@ -112,4 +128,4 @@ const protocolSource = fs.readFileSync(path.join(extensionRoot, "lib/protocol.js
 assert.doesNotMatch(protocolSource, /parts\s*:\s*parts/);
 assert.doesNotMatch(protocolSource, /raw(?:Data|Payload|Body)\s*:/);
 
-console.log(`Validated ${packagedFiles.length} extension files with one MAIN-world network hook, allowlisted Chat/Work switching, isolated controls, and fixed chatgpt.com scope.`);
+console.log(`Validated ${packagedFiles.length} extension files with packaged PNG icons, one MAIN-world network hook, allowlisted Chat/Work switching, isolated controls, and fixed chatgpt.com scope.`);

@@ -61,7 +61,7 @@ window.__CHATGPT_UI_STATE_INSPECTOR_STATE__.phase
 
 ## 아이콘
 
-service worker가 Chrome 공식 `action.setIcon({imageData})` 경로와 `OffscreenCanvas`를 사용해 ↔ 모양의 전용 툴바 아이콘을 16/32/48/128 크기로 생성합니다. 외부 이미지나 원격 자산을 사용하지 않습니다.
+`manifest.json`은 16/32/48/128 PNG 아이콘을 `icons`와 `action.default_icon`에 연결합니다. PNG는 `scripts/generate-icons.mjs`가 외부 이미지나 신규 의존성 없이 결정론적으로 생성하며, GitHub Actions가 테스트와 패키징 전에 생성·크기 검증·아카이브 포함 여부까지 확인합니다. service worker는 같은 청록색 ↔ 디자인을 `action.setIcon({imageData})`와 `OffscreenCanvas`로 다시 적용해 툴바 아이콘도 일관되게 유지합니다.
 
 ## 설치
 
@@ -95,11 +95,12 @@ service worker가 Chrome 공식 `action.setIcon({imageData})` 경로와 `Offscre
 ## 개발 및 검증
 
 ```bash
+node scripts/generate-icons.mjs
 node --test
 node scripts/validate-package.mjs
 ```
 
-GitHub Actions는 `v*-dev*` push에서 JavaScript 구문, 단위/계약 테스트, 패키지 보안 경계, loadable archive 구조를 검증하고 unpacked `extension/` 디렉터리를 TEST artifact로 업로드합니다.
+GitHub Actions는 `v*-dev*` push에서 JavaScript 구문, 아이콘 생성, 단위/계약 테스트, 패키지 보안 경계, loadable archive 구조와 PNG 포함 여부를 검증하고 unpacked `extension/` 디렉터리를 TEST artifact로 업로드합니다.
 
 ## 알려진 검증 공백
 

@@ -3,18 +3,25 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-const manifest = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json", import.meta.url), "utf8"));
-const sidepanelHtml = fs.readFileSync(new URL("../extension/sidepanel.html", import.meta.url), "utf8");
-const sidepanelSource = fs.readFileSync(new URL("../extension/sidepanel.js", import.meta.url), "utf8");
-const sidepanelSwitch = fs.readFileSync(new URL("../extension/sidepanel-switch.js", import.meta.url), "utf8");
-const handshakeSource = fs.readFileSync(new URL("../extension/handshake.js", import.meta.url), "utf8");
-const carrierSource = fs.readFileSync(new URL("../extension/lib/protocol-structure-carrier.js", import.meta.url), "utf8");
-const nativeSource = fs.readFileSync(new URL("../extension/lib/work-native-state.js", import.meta.url), "utf8");
-const switchCore = fs.readFileSync(new URL("../extension/lib/chat-work-switch-core.js", import.meta.url), "utf8");
-const switchController = fs.readFileSync(new URL("../extension/switch-controller.js", import.meta.url), "utf8");
-const backgroundSource = fs.readFileSync(new URL("../extension/background.js", import.meta.url), "utf8");
-const contentSource = fs.readFileSync(new URL("../extension/content.js", import.meta.url), "utf8");
-const pageProbeSource = fs.readFileSync(new URL("../extension/page-probe.js", import.meta.url), "utf8");
+const extensionRoot = new URL("../extension/", import.meta.url);
+const manifest = JSON.parse(fs.readFileSync(new URL("manifest.json", extensionRoot), "utf8"));
+const sidepanelHtml = fs.readFileSync(new URL("sidepanel.html", extensionRoot), "utf8");
+const sidepanelSource = fs.readFileSync(new URL("sidepanel.js", extensionRoot), "utf8");
+const sidepanelSwitch = fs.readFileSync(new URL("sidepanel-switch.js", extensionRoot), "utf8");
+const handshakeSource = fs.readFileSync(new URL("handshake.js", extensionRoot), "utf8");
+const carrierSource = fs.readFileSync(new URL("lib/protocol-structure-carrier.js", extensionRoot), "utf8");
+const nativeSource = fs.readFileSync(new URL("lib/work-native-state.js", extensionRoot), "utf8");
+const switchCore = fs.readFileSync(new URL("lib/chat-work-switch-core.js", extensionRoot), "utf8");
+const switchController = fs.readFileSync(new URL("switch-controller.js", extensionRoot), "utf8");
+const backgroundSource = fs.readFileSync(new URL("background.js", extensionRoot), "utf8");
+const contentSource = fs.readFileSync(new URL("content.js", extensionRoot), "utf8");
+const pageProbeSource = fs.readFileSync(new URL("page-probe.js", extensionRoot), "utf8");
+const expectedIcons = {
+  "16": "icons/icon-16.png",
+  "32": "icons/icon-32.png",
+  "48": "icons/icon-48.png",
+  "128": "icons/icon-128.png"
+};
 
 test("uses Manifest V3 and a single fixed host boundary across both worlds", () => {
   assert.equal(manifest.manifest_version, 3);
@@ -82,7 +89,16 @@ test("integrates switching controls into the existing side panel", () => {
   assert.doesNotMatch(sidepanelSource, /chrome\.scripting\.executeScript/);
 });
 
-test("provides a programmatically generated toolbar icon in the service worker", () => {
+test("declares packaged PNG icons and retains the dynamic toolbar refresh", () => {
+  assert.deepEqual(manifest.icons, expectedIcons);
+  assert.deepEqual(manifest.action.default_icon, expectedIcons);
+  for (const [sizeText, file] of Object.entries(expectedIcons)) {
+    const size = Number(sizeText);
+    const icon = fs.readFileSync(new URL(file, extensionRoot));
+    assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], file);
+    assert.equal(icon.readUInt32BE(16), size, `${file} width`);
+    assert.equal(icon.readUInt32BE(20), size, `${file} height`);
+  }
   assert.match(backgroundSource, /new OffscreenCanvas/);
   assert.match(backgroundSource, /chrome\.action\.setIcon/);
   assert.match(backgroundSource, /\[16, 32, 48, 128\]/);
@@ -95,9 +111,10 @@ test("all manifest and side-panel files exist", () => {
     "sidepanel.css",
     "sidepanel.js",
     "sidepanel-switch.js",
+    ...Object.values(manifest.icons),
     ...manifest.content_scripts.flatMap((script) => script.js)
   ];
   for (const file of files) {
-    assert.equal(fs.existsSync(path.join(new URL("../extension/", import.meta.url).pathname, file)), true, file);
+    assert.equal(fs.existsSync(path.join(extensionRoot.pathname, file)), true, file);
   }
 });

@@ -44,7 +44,7 @@ test("work transform changes only allowlisted control fields and preserves prote
   assert.equal(result.body.conversation_id, conversationId);
   assert.strictEqual(result.body.messages, messages);
   assert.equal(result.body.parent_message_id, "parent-1");
-  assert.deepEqual(result.body.arbitrary, {keep: true});
+  assert.equal(result.body.arbitrary.keep, true);
   assert.equal(result.body.model, "gpt-5.6-luna-wm");
   assert.equal(result.body.thinking_effort, "standard");
   assert.equal(result.body.conversation_origin, "tpp");

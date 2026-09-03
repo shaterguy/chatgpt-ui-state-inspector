@@ -26,6 +26,9 @@ jobs:
           find extension scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 |
             xargs -0 -n1 node --check
 
+      - name: Generate extension icons
+        run: node scripts/generate-icons.mjs
+
       - name: Run unit and manifest tests
         run: node --test
 
@@ -42,6 +45,10 @@ jobs:
             zip -q -r "../${ARCHIVE}" .
           )
           unzip -Z1 "${ARCHIVE}" | grep -Fx manifest.json
+          unzip -Z1 "${ARCHIVE}" | grep -Fx icons/icon-16.png
+          unzip -Z1 "${ARCHIVE}" | grep -Fx icons/icon-32.png
+          unzip -Z1 "${ARCHIVE}" | grep -Fx icons/icon-48.png
+          unzip -Z1 "${ARCHIVE}" | grep -Fx icons/icon-128.png
           unzip -t "${ARCHIVE}"
 
       - name: Upload unpacked extension artifact

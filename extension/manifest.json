@@ -5,6 +5,12 @@
   "version_name": "0.2.0-dev1-integrated-chat-work-switcher",
   "description": "Inspect ChatGPT turn states and optionally switch Chat/Work request profiles inside the same conversation.",
   "minimum_chrome_version": "114",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "activeTab",
     "scripting",
@@ -13,7 +19,13 @@
     "sidePanel"
   ],
   "action": {
-    "default_title": "Open ChatGPT UI State Inspector"
+    "default_title": "Open ChatGPT UI State Inspector",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
