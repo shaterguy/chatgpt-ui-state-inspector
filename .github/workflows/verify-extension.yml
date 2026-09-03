@@ -32,6 +32,12 @@ jobs:
       - name: Run unit and manifest tests
         run: node --test
 
+      - name: Install browser smoke dependency
+        run: npm install --no-save --package-lock=false puppeteer-core@24.16.0
+
+      - name: Run real Chrome side panel smoke
+        run: xvfb-run -a node tests/sidepanel-browser-smoke.mjs
+
       - name: Validate security and package boundary
         run: node scripts/validate-package.mjs
 
