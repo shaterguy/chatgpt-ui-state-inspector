@@ -26,7 +26,7 @@ const expectedIcons = {
 test("uses Manifest V3 and a single fixed host boundary across both worlds", () => {
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.version, "0.2.0");
-  assert.match(manifest.version_name, /0\.2\.0-dev1/);
+  assert.match(manifest.version_name, /0\.2\.0-dev2/);
   assert.equal(manifest.content_scripts.length, 2);
   for (const contentScript of manifest.content_scripts) {
     assert.deepEqual(contentScript.matches, ["https://chatgpt.com/*"]);
@@ -87,6 +87,15 @@ test("integrates switching controls into the existing side panel", () => {
   assert.match(sidepanelSwitch, /GET_CHAT_WORK_SWITCH_STATUS/);
   assert.match(sidepanelSource, /EXPECTED_CARRIER_BUILD\s*=\s*"0\.1\.3-dev7"/);
   assert.doesNotMatch(sidepanelSource, /chrome\.scripting\.executeScript/);
+});
+
+test("reasserts the canonical side panel configuration whenever the service worker starts", () => {
+  assert.match(backgroundSource, /async function ensureSidePanelReady\(\)/);
+  assert.match(backgroundSource, /chrome\.sidePanel\.setOptions\(\{path: "sidepanel\.html", enabled: true\}\)/);
+  assert.match(backgroundSource, /chrome\.sidePanel\.setPanelBehavior\(\{openPanelOnActionClick: true\}\)/);
+  assert.match(backgroundSource, /chrome\.runtime\.onInstalled\.addListener\(initializeExtensionUi\)/);
+  assert.match(backgroundSource, /chrome\.runtime\.onStartup\.addListener\(initializeExtensionUi\)/);
+  assert.match(backgroundSource, /initializeExtensionUi\(\);/);
 });
 
 test("declares packaged PNG icons and retains the dynamic toolbar refresh", () => {
