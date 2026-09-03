@@ -63,6 +63,26 @@ try {
     throw new Error(`Toolbar behavior is not armed: ${JSON.stringify(direct.behavior)}`);
   }
 
+  await directPage.evaluate(() => chrome.sidePanel.setOptions({path: "sidepanel.html", enabled: false}));
+  const stale = await directPage.evaluate(() => chrome.sidePanel.getOptions({}));
+  if (stale.enabled !== false) throw new Error(`Could not create stale side panel state: ${JSON.stringify(stale)}`);
+
+  const workerTarget = await browser.waitForTarget((target) =>
+    target.type() === "service_worker" && target.url().startsWith(`chrome-extension://${extensionId}/`)
+  );
+  const worker = await workerTarget.worker();
+  await worker.close();
+  await directPage.evaluate(() => chrome.runtime.sendMessage({type: "LIST_SESSIONS"}));
+  await directPage.waitForFunction(async () => {
+    const options = await chrome.sidePanel.getOptions({});
+    const behavior = await chrome.sidePanel.getPanelBehavior();
+    return options.enabled === true && options.path === "sidepanel.html" && behavior.openPanelOnActionClick === true;
+  }, {timeout: 5000});
+  const recovered = await directPage.evaluate(async () => ({
+    options: await chrome.sidePanel.getOptions({}),
+    behavior: await chrome.sidePanel.getPanelBehavior()
+  }));
+
   const tabPage = await browser.newPage();
   await tabPage.goto("https://example.com", {waitUntil: "domcontentloaded"});
   await extension.triggerAction(tabPage);
@@ -78,7 +98,7 @@ try {
     throw new Error(`Sidepanel boot emitted errors: ${JSON.stringify({pageErrors, consoleErrors})}`);
   }
 
-  console.log("SIDEPANEL_BROWSER_SMOKE_PASS", JSON.stringify({extensionId, direct, sidePanelContext: actual}));
+  console.log("SIDEPANEL_BROWSER_SMOKE_PASS", JSON.stringify({extensionId, direct, recovered, sidePanelContext: actual}));
 } finally {
   await browser.close();
 }
